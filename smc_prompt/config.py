@@ -104,6 +104,147 @@ DEFAULT_BASE_URLS: tuple[str, ...] = (
 )
 
 # --------------------------------------------------------------------------
+# Data providers (Binance / Twelve Data / OANDA)
+# --------------------------------------------------------------------------
+# The analysis pipeline is provider-agnostic: it consumes ``Sequence[Candle]``.
+# A provider is any class exposing the fetcher-parity seam
+# (``validate_symbol`` / ``fetch_klines`` / ``fetch_current_price`` /
+# ``fetch_server_time`` / ``price_notes`` / ``with_now``). Binance is the
+# default; the FX/metal providers make spot XAUUSD analyzable, which Binance
+# ST> cannot serve (no fiat/metal instruments listed).
+
+PROVIDER_BINANCE: str = "binance"
+PROVIDER_TWELVEDATA: str = "twelvedata"
+PROVIDER_OANDA: str = "oanda"
+PROVIDERS: tuple[str, ...] = (
+    PROVIDER_BINANCE,
+    PROVIDER_TWELVEDATA,
+    PROVIDER_OANDA,
+)
+
+#: Human-readable provider names used in messages / the prompt banner.
+PROVIDER_LABELS: dict[str, str] = {
+    PROVIDER_BINANCE: "Binance",
+    PROVIDER_TWELVEDATA: "Twelve Data",
+    PROVIDER_OANDA: "OANDA",
+}
+
+#: Canonical (Binance-style) interval -> Twelve Data ``interval`` parameter.
+#: Twelve Data natively supports ``4h`` so the default trio maps 1:1.
+TWELVEDATA_INTERVAL_MAP: dict[str, str] = {
+    "1m": "1min",
+    "5m": "5min",
+    "15m": "15min",
+    "30m": "30min",
+    "1h": "1h",
+    "2h": "2h",
+    "4h": "4h",
+    "1d": "1day",
+    "1w": "1week",
+    "1M": "1month",
+}
+
+#: Canonical interval -> OANDA v20 ``granularity``. OANDA natively supports H4
+#: so the default trio maps 1:1.
+OANDA_INTERVAL_MAP: dict[str, str] = {
+    "1m": "M1",
+    "5m": "M5",
+    "15m": "M15",
+    "30m": "M30",
+    "1h": "H1",
+    "4h": "H4",
+    "1d": "D",
+    "1w": "W",
+    "1M": "M",
+}
+
+#: Default OANDA v20 host. ``practice`` (demo) is the default because a free
+#: practice account is enough to read candles; ``live`` needs a funded account.
+OANDA_ENV_PRACTICE: str = "practice"
+OANDA_ENV_LIVE: str = "live"
+OANDA_ENVS: tuple[str, ...] = (OANDA_ENV_PRACTICE, OANDA_ENV_LIVE)
+OANDA_HOSTS: dict[str, str] = {
+    OANDA_ENV_PRACTICE: "https://api-fxpractice.oanda.com",
+    OANDA_ENV_LIVE: "https://api-fxtrade.oanda.com",
+}
+
+#: Default Twelve Data host.
+TWELVEDATA_HOST: str = "https://api.twelvedata.com"
+
+#: Canonical symbol -> provider spelling, for instruments whose provider code is
+#: not derivable by the generic FX heuristic (see :func:`provider_symbol`).
+PROVIDER_SYMBOLS: dict[str, dict[str, str]] = {
+    PROVIDER_TWELVEDATA: {"XAUUSD": "XAU/USD"},
+    PROVIDER_OANDA: {"XAUUSD": "XAU_USD"},
+}
+
+#: Price precision used when a provider has no exchange ``tickSize`` metadata.
+#: Spot XAUUSD quotes on 2 decimals at every mainstream venue.
+FALLBACK_TICK_DECIMALS: int = 2
+
+#: The provider display name reaches the prompt through the ``{{provider}}``
+#: render variable (see ``template_renderer.PROVIDER_NAME_VAR``) rather than a
+#: placeholder, so one byte-frozen template serves Binance, Twelve Data and
+#: OANDA. The mapping itself lives in :data:`PROVIDER_LABELS`.
+
+
+def provider_label(provider: str) -> str:
+    """Human-readable provider name (falls back to the raw slug)."""
+
+    return PROVIDER_LABELS.get(provider, provider)
+
+
+def provider_symbol(provider: str, symbol: str) -> str:
+    """Map a canonical uppercase symbol to the provider's instrument code.
+
+    Binance uses the canonical spelling verbatim. The FX providers accept a
+    separated form (``XAU/USD`` for Twelve Data, ``XAU_USD`` for OANDA); the
+    explicit :data:`PROVIDER_SYMBOLS` table covers the metallic pairs, and a
+    deterministic 6-letter FX heuristic (``EURUSD`` -> ``EUR/USD`` /
+    ``EUR_USD``) covers the common currency majors. Anything else is passed
+    through verbatim so a caller can supply the provider's own instrument code.
+    """
+
+    normalized = (symbol or "").strip().upper()
+    if provider == PROVIDER_BINANCE:
+        return normalized
+
+    explicit = PROVIDER_SYMBOLS.get(provider, {})
+    if normalized in explicit:
+        return explicit[normalized]
+
+    if len(normalized) == 6 and normalized.isalpha():
+        separator = "/" if provider == PROVIDER_TWELVEDATA else "_"
+        return f"{normalized[:3]}{separator}{normalized[3:]}"
+    return normalized
+
+
+def provider_interval(provider: str, interval: str) -> str:
+    """Translate a canonical interval into the provider's interval token.
+
+    Raises :class:`~smc_prompt.errors.ConfigError` (exit 2) naming the flag and
+    the provider's full allowed set when the interval is unsupported there.
+    """
+
+    if provider == PROVIDER_BINANCE:
+        return interval
+
+    if provider == PROVIDER_TWELVEDATA:
+        table = TWELVEDATA_INTERVAL_MAP
+    elif provider == PROVIDER_OANDA:
+        table = OANDA_INTERVAL_MAP
+    else:  # pragma: no cover - guarded by build_config
+        return interval
+
+    try:
+        return table[interval]
+    except KeyError as exc:
+        raise ConfigError(
+            f"Provider '{provider_label(provider)}' does not support the "
+            f"interval '{interval}'. Allowed: " + ", ".join(table) + "."
+        ) from exc
+
+# --------------------------------------------------------------------------
 # Numeric defaults
 # --------------------------------------------------------------------------
 
@@ -435,6 +576,22 @@ class Config:
     #: has been parsed.
     price_format: PriceFormat = field(default_factory=PriceFormat)
 
+    #: Data provider slug (:data:`PROVIDER_BINANCE` default). The analysis
+    #: pipeline is provider-agnostic; only the data source selected in ``cli``
+    #: changes. Kept on the config so the banner/warnings can name the source.
+    provider: str = PROVIDER_BINANCE
+    #: False for providers whose candles carry no meaningful volume (OANDA's FX
+    #: feeds report zero volume). It suppresses BOTH the fabricated relative
+    #: volume and the delisted/zero-volume heuristic, which would otherwise fire
+    #: on every such run (spec §9 warning matrix).
+    volume_available: bool = True
+
+    @property
+    def provider_label(self) -> str:
+        """Human-readable provider name (e.g. ``Twelve Data``)."""
+
+        return provider_label(self.provider)
+
     @property
     def htf_fetch_limit(self) -> int:
         """Candles to request for HTF (table size + context buffer, capped)."""
@@ -491,6 +648,8 @@ def build_config(
     max_prompt_bytes: int | None = None,
     base_urls: Sequence[str] | None = None,
     price_format: PriceFormat | None = None,
+    provider: str = PROVIDER_BINANCE,
+    volume_available: bool | None = None,
 ) -> Config:
     """Validate raw CLI arguments and build an immutable :class:`Config`.
 
@@ -548,10 +707,24 @@ def build_config(
         if not isinstance(max_prompt_bytes, int) or max_prompt_bytes < 1:
             raise ConfigError("--max-prompt-bytes must be an integer >= 1.")
 
+    if provider not in PROVIDERS:
+        raise ConfigError(
+            "--provider must be one of: " + ", ".join(PROVIDERS) + "."
+        )
+
     hosts = tuple(base_urls) if base_urls else DEFAULT_BASE_URLS
     hosts = tuple(host.rstrip("/") for host in hosts if host and host.strip())
     if not hosts:
         raise ConfigError("At least one Binance base URL must be provided.")
+
+    # Twelve Data and OANDA report no usable volume on their FX/metal feeds, so
+    # the derived volume facts (and the zero-volume delisted heuristic) are
+    # disabled unless the caller explicitly overrides it.
+    resolved_volume_available = (
+        provider == PROVIDER_BINANCE
+        if volume_available is None
+        else bool(volume_available)
+    )
 
     return Config(
         symbol=normalized_symbol,
@@ -571,4 +744,6 @@ def build_config(
         max_prompt_bytes=max_prompt_bytes,
         base_urls=hosts,
         price_format=price_format or PriceFormat(),
+        provider=provider,
+        volume_available=resolved_volume_available,
     )

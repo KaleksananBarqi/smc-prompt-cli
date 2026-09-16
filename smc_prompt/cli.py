@@ -6,6 +6,7 @@ that maps exceptions to process exit codes. It contains no analysis logic.
 
 from __future__ import annotations
 
+import os
 import sys
 import traceback
 from dataclasses import dataclass, replace
@@ -16,7 +17,7 @@ import click
 
 from . import __version__, config as cfg
 from .csv_source import LocalCsvSource
-from .data_fetcher import DataFetcher, price_sanity_warning
+from .data_fetcher import DataFetcher
 from .errors import (
     ConfigError,
     DelistedWarning,
@@ -25,7 +26,10 @@ from .errors import (
     SymbolStatusWarning,
     exit_code_for,
 )
+from .oanda_source import OandaSource
 from .output import deliver
+from .provider_base import price_sanity_warning
+from .twelvedata_source import TwelveDataSource
 from .structure_analyzer import (
     analyze,
     compute_atr,
@@ -34,6 +38,12 @@ from .structure_analyzer import (
 from .template_renderer import build_payload, render
 
 PROG = "smc-prompt"
+
+#: Environment-variable fallbacks for the provider credentials, so a normal
+#: shell profile does not have to repeat the key on every invocation.
+TWELVEDATA_KEY_ENV = "TWELVEDATA_API_KEY"
+OANDA_TOKEN_ENV = "OANDA_API_TOKEN"
+OANDA_ACCOUNT_ENV = "OANDA_ACCOUNT_ID"
 
 
 @dataclass(frozen=True)
@@ -76,6 +86,55 @@ def _warn(message: str) -> None:
 
 def _error(message: str) -> None:
     click.echo(f"[{PROG}] ERROR: {message}", err=True)
+
+
+def _env_value(name: str) -> str | None:
+    """Return a non-empty environment value, or ``None``."""
+
+    value = os.environ.get(name)
+    return value.strip() if value and value.strip() else None
+
+
+def _resolve_credentials(
+    twelvedata_key: str | None,
+    oanda_token: str | None,
+    oanda_account_id: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    """Apply the environment fallbacks for the provider credentials."""
+
+    return (
+        twelvedata_key or _env_value(TWELVEDATA_KEY_ENV),
+        oanda_token or _env_value(OANDA_TOKEN_ENV),
+        oanda_account_id or _env_value(OANDA_ACCOUNT_ENV),
+    )
+
+
+def _make_provider_source(
+    config: cfg.Config,
+    *,
+    twelvedata_key: str | None,
+    oanda_token: str | None,
+    oanda_account_id: str | None,
+    oanda_env: str,
+) -> TwelveDataSource | OandaSource:
+    """Build the configured network data source (Binance is built separately).
+
+    Every provider exposes the same public shape, so the analysis pipeline below
+    is untouched by the choice.
+    """
+
+    if config.provider == cfg.PROVIDER_TWELVEDATA:
+        return TwelveDataSource(config, api_key=twelvedata_key or "")
+    if config.provider == cfg.PROVIDER_OANDA:
+        return OandaSource(
+            config,
+            token=oanda_token or "",
+            environment=oanda_env,
+            account_id=oanda_account_id,
+        )
+    raise ConfigError(f"Unsupported provider '{config.provider}'.")
+
+
 
 
 def _resolve_input_files(
@@ -142,7 +201,11 @@ def _print_resolved_settings(
     unless ``--stdout`` is also given.
     """
 
-    source = "offline CSV" if offline_mode else "Binance network"
+    source = (
+        "offline CSV"
+        if offline_mode
+        else f"{config.provider_label} network"
+    )
     if offline_mode:
         source = (
             f"{source} (HTF={htf_file}, MTF={mtf_file}, LTF={ltf_file})"
@@ -150,6 +213,7 @@ def _print_resolved_settings(
     lines = [
         f"[{PROG}] DRY RUN — no file written, no klines fetched.",
         f"[{PROG}] symbol={config.symbol}",
+        f"[{PROG}] provider={config.provider}",
         f"[{PROG}] data source={source}",
         f"[{PROG}] htf_interval={config.htf_interval} "
         f"({config.htf_interval_label}) mtf_interval={config.mtf_interval} "
@@ -166,7 +230,8 @@ def _print_resolved_settings(
         f"ltf_fetch_limit={config.ltf_fetch_limit}",
         f"[{PROG}] output_dir={config.output_dir} stdout={print_stdout}",
         f"[{PROG}] volume_mean_period={config.volume_mean_period} "
-        f"volume_spike_mult={cfg.fmt_ratio(config.volume_spike_mult)}",
+        f"volume_spike_mult={cfg.fmt_ratio(config.volume_spike_mult)} "
+        f"volume_available={config.volume_available}",
         f"[{PROG}] prompt_bytes_warn={config.prompt_bytes_warn} "
         f"max_prompt_bytes={max_prompt_bytes}",
     ]
@@ -222,8 +287,17 @@ def run(
     ltf_file: str | None = None,
     max_prompt_bytes: int | None = None,
     dry_run: bool = False,
+    provider: str = cfg.PROVIDER_BINANCE,
+    twelvedata_key: str | None = None,
+    oanda_token: str | None = None,
+    oanda_account_id: str | None = None,
+    oanda_env: str = cfg.OANDA_ENV_PRACTICE,
 ) -> RunResult:
     """Chain fetch -> analyze -> render -> output. Raises on any failure."""
+
+    key, token, account_id = _resolve_credentials(
+        twelvedata_key, oanda_token, oanda_account_id
+    )
 
     config = cfg.build_config(
         symbol,
@@ -239,6 +313,7 @@ def run(
         output_dir=output_dir,
         max_prompt_bytes=max_prompt_bytes,
         base_urls=base_urls,
+        provider=provider,
     )
 
     offline_htf, offline_mtf, offline_ltf = _resolve_input_files(
@@ -266,10 +341,13 @@ def run(
         return RunResult("", "", False, False, (), dry_run=True)
 
     warnings: list[str] = []
-    # Data source selection: the network fetcher remains the DEFAULT. The local
-    # CSV source is an additive, network-free path (Phase 4, #10) that exposes
-    # the same interface, so the analysis pipeline below is untouched.
-    fetcher: DataFetcher | LocalCsvSource
+    # Data source selection. Three interchangeable sources share one public
+    # shape, so the analysis pipeline below is untouched by the choice:
+    #   * offline CSV      — enabled ONLY by --input-csv (network-free)
+    #   * Binance          — the default network provider (crypto)
+    #   * Twelve Data / OANDA — network providers that can serve XAUUSD, which
+    #     Binance Spot cannot (no fiat/forex/metal instruments)
+    fetcher: DataFetcher | LocalCsvSource | TwelveDataSource | OandaSource
     if offline_mode:
         fetcher = LocalCsvSource(
             config,
@@ -277,8 +355,16 @@ def run(
             mtf_file=offline_mtf,
             ltf_file=offline_ltf,
         )
-    else:
+    elif config.provider == cfg.PROVIDER_BINANCE:
         fetcher = DataFetcher(config)
+    else:
+        fetcher = _make_provider_source(
+            config,
+            twelvedata_key=key,
+            oanda_token=token,
+            oanda_account_id=account_id,
+            oanda_env=oanda_env,
+        )
 
     # exchangeInfo is fetched once: it validates the symbol, yields the
     # PRICE_FILTER.tickSize for tick-precise price rendering (#9) and carries
@@ -295,9 +381,11 @@ def run(
     if isinstance(status, str) and status and status != "TRADING":
         warnings.append(SymbolStatusWarning(config.symbol, status).message())
 
-    # Prefer Binance server time over the host clock for the closure decision
-    # so a skewed local clock cannot inject a half-open candle (#8). The fetcher
-    # exposes an injectable ``now`` seam; rebind it to the fixed server instant.
+    # Prefer the provider's own clock over the host clock for the closure
+    # decision so a skewed local clock cannot inject a half-open candle (#8).
+    # The fetcher exposes an injectable ``now`` seam; rebind it to the fixed
+    # instant. The FX providers expose no clock endpoint and return the host
+    # clock directly (by design), so this path is only a WARN for Binance.
     server_time: datetime | None = None
     if offline_mode:
         # Offline mode derives ``now`` from the CSV (max close_time + 1s), so
@@ -309,8 +397,9 @@ def run(
             server_time = fetcher.fetch_server_time()
         except NetworkError as exc:
             _warn(
-                f"Binance server time unavailable ({exc}); falling back to the "
-                f"host clock for candle-closure and GENERATED_AT_UTC."
+                f"{config.provider_label} server time unavailable ({exc}); "
+                f"falling back to the host clock for candle-closure and "
+                f"GENERATED_AT_UTC."
             )
     if server_time is not None:
         fetcher = fetcher.with_now(server_time)
@@ -335,7 +424,11 @@ def run(
     )
     warnings.extend(fetcher.price_notes)
     price_warning = price_sanity_warning(
-        current_price, reference_candle, ltf_atr, symbol=config.symbol
+        current_price,
+        reference_candle,
+        ltf_atr,
+        symbol=config.symbol,
+        price_format=config.price_format,
     )
     if price_warning is not None:
         warnings.append(price_warning)
@@ -383,13 +476,19 @@ def run(
             f"Reduced table to {ltf_stats.emitted_count}."
         )
 
-    for stats in (htf_stats, mtf_stats, ltf_stats):
-        if stats.zero_volume_streak >= config.delisted_zero_volume_streak:
-            warnings.append(
-                DelistedWarning(
-                    config.symbol, stats.zero_volume_streak
-                ).message()
-            )
+    # The zero-volume delisted heuristic only means something when the feed
+    # actually carries volume. OANDA reports a tick count (zeroed by the
+    # provider) and Twelve Data reports zero for metals, so gating on
+    # ``config.volume_available`` is what stops every FX run from warning that a
+    # perfectly tradable pair "may be delisted or halted".
+    if config.volume_available:
+        for stats in (htf_stats, mtf_stats, ltf_stats):
+            if stats.zero_volume_streak >= config.delisted_zero_volume_streak:
+                warnings.append(
+                    DelistedWarning(
+                        config.symbol, stats.zero_volume_streak
+                    ).message()
+                )
 
     # Mechanical reference/structure contradictions (deterministic; empty when
     # consistent). Non-fatal: the prompt is still rendered with the raw facts.
@@ -412,19 +511,27 @@ def run(
         ltf_candles=ltf_table,
         config=config,
     )
-    rendered = render(payload, include_atr=config.include_atr)
+    # ``provider_name`` is a render variable, not a payload placeholder, so the
+    # frozen template stays provider-agnostic while the provenance line always
+    # names the source that actually produced the data.
+    rendered = render(
+        payload,
+        include_atr=config.include_atr,
+        provider_name=config.provider_label,
+    )
+    prompt_text = rendered.text
 
     # Post-render size guard (Phase 5, #11): the hard limit raises ConfigError
     # (exit 2) before anything is written; the soft threshold only WARNs.
-    size_notes = _prompt_size_notes(rendered.text, config)
+    size_notes = _prompt_size_notes(prompt_text, config)
     for note in size_notes:
         _warn(note)
 
     if print_stdout:
-        click.echo(rendered.text, nl=False)
+        click.echo(prompt_text, nl=False)
 
     result = deliver(
-        rendered.text,
+        prompt_text,
         symbol=config.symbol,
         output_dir=config.output_dir,
         moment=generated_at,
@@ -437,7 +544,7 @@ def run(
         click.echo(f"[{PROG}] Prompt copied to clipboard.", err=True)
 
     return RunResult(
-        rendered.text,
+        prompt_text,
         output_path,
         result.copied_to_clipboard,
         print_stdout,
@@ -449,11 +556,58 @@ def run(
     name=PROG,
     context_settings={"help_option_names": ["-h", "--help"]},
     help=(
-        "Generate a mechanical SMC/ICT [FAKTA] prompt payload from Binance "
-        "public market data. No LLM calls, no reasoning, no trading."
+        "Generate a mechanical SMC/ICT [FAKTA] prompt payload from read-only "
+        "public market data (Binance / Twelve Data / OANDA). Useful for FX and "
+        "metals (e.g. XAUUSD) which Binance Spot does not list. No LLM calls, "
+        "no reasoning, no trading."
     ),
 )
 @click.argument("symbol")
+@click.option(
+    "--provider",
+    type=click.Choice(list(cfg.PROVIDERS)),
+    default=cfg.PROVIDER_BINANCE,
+    show_default=True,
+    help=(
+        "Data provider. Binance serves crypto only; Twelve Data and OANDA "
+        "serve spot FX/metals (XAUUSD)."
+    ),
+)
+@click.option(
+    "--twelvedata-key",
+    "twelvedata_key",
+    default=None,
+    help=(
+        f"Twelve Data API key. Falls back to the {TWELVEDATA_KEY_ENV} "
+        f"environment variable."
+    ),
+)
+@click.option(
+    "--oanda-token",
+    "oanda_token",
+    default=None,
+    help=(
+        f"OANDA v20 API token. Falls back to the {OANDA_TOKEN_ENV} "
+        f"environment variable."
+    ),
+)
+@click.option(
+    "--oanda-account-id",
+    "oanda_account_id",
+    default=None,
+    help=(
+        f"OANDA v20 account id (optional; auto-discovered). Falls back to the "
+        f"{OANDA_ACCOUNT_ENV} environment variable."
+    ),
+)
+@click.option(
+    "--oanda-env",
+    "oanda_env",
+    type=click.Choice(list(cfg.OANDA_ENVS)),
+    default=cfg.OANDA_ENV_PRACTICE,
+    show_default=True,
+    help="OANDA environment: practice (free demo) or live (funded account).",
+)
 @click.option(
     "--htf-candles",
     type=int,
@@ -481,8 +635,8 @@ def run(
     default=cfg.HTF_INTERVAL,
     show_default=True,
     help=(
-        "Binance kline interval for the HTF series (e.g. 1d, 4h). "
-        "Allowed: " + ", ".join(cfg.BINANCE_INTERVALS) + "."
+        "Candle interval for the HTF series (e.g. 1d, 4h). Mapped per provider "
+        "via --provider. Allowed: " + ", ".join(cfg.BINANCE_INTERVALS) + "."
     ),
 )
 @click.option(
@@ -491,8 +645,8 @@ def run(
     default=cfg.MTF_INTERVAL,
     show_default=True,
     help=(
-        "Binance kline interval for the MTF series (e.g. 4h, 2h). "
-        "Allowed: " + ", ".join(cfg.BINANCE_INTERVALS) + "."
+        "Candle interval for the MTF series (e.g. 4h, 2h). Mapped per provider "
+        "via --provider. Allowed: " + ", ".join(cfg.BINANCE_INTERVALS) + "."
     ),
 )
 @click.option(
@@ -501,8 +655,8 @@ def run(
     default=cfg.LTF_INTERVAL,
     show_default=True,
     help=(
-        "Binance kline interval for the LTF series (e.g. 1h, 15m). "
-        "Allowed: " + ", ".join(cfg.BINANCE_INTERVALS) + "."
+        "Candle interval for the LTF series (e.g. 1h, 15m). Mapped per provider "
+        "via --provider. Allowed: " + ", ".join(cfg.BINANCE_INTERVALS) + "."
     ),
 )
 @click.option(
@@ -531,7 +685,7 @@ def run(
     "base_url",
     default=None,
     help=(
-        "Override the Binance REST host. Falls back to "
+        "Override the Binance REST host (Binance provider only). Falls back to "
         + ", ".join(cfg.DEFAULT_BASE_URLS)
         + " on connection errors / HTTP 451 / 403."
     ),
@@ -625,6 +779,11 @@ def main(
     ltf_file: str | None,
     max_prompt_bytes: int | None,
     dry_run: bool,
+    provider: str,
+    twelvedata_key: str | None,
+    oanda_token: str | None,
+    oanda_account_id: str | None,
+    oanda_env: str,
     debug: bool,
 ) -> None:
     """CLI entrypoint. Parses args, then delegates to :func:`run`."""
@@ -659,6 +818,11 @@ def main(
             ltf_file=ltf_file,
             max_prompt_bytes=max_prompt_bytes,
             dry_run=dry_run,
+            provider=provider,
+            twelvedata_key=twelvedata_key,
+            oanda_token=oanda_token,
+            oanda_account_id=oanda_account_id,
+            oanda_env=oanda_env,
         )
     except SmcPromptError as exc:
         _error(str(exc))

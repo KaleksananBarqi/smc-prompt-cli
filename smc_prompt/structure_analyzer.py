@@ -166,6 +166,7 @@ def compute_relative_volume(
     *,
     period: int = cfg.DEFAULT_VOLUME_MEAN_PERIOD,
     spike_mult: Decimal = cfg.DEFAULT_VOLUME_SPIKE_MULT,
+    enabled: bool = True,
 ) -> VolumeMetrics | None:
     """Compute ``last / mean(last ``period`` volumes)`` and the spike flag.
 
@@ -174,8 +175,14 @@ def compute_relative_volume(
     available so no fabricated ratio is emitted, and the ratio is ``0``-safe
     (a zero mean volume yields a ``Decimal("0")`` relative volume rather than a
     division error). ``is_spike`` is ``relative >= spike_mult``.
+
+    ``enabled=False`` (``config.volume_available`` is False for providers whose
+    feed carries no real volume, e.g. OANDA's tick counts) returns ``None`` so
+    the facts render ``n/a`` instead of a fabricated ``x0.00``/``spike: no``.
     """
 
+    if not enabled:
+        return None
     if len(candles) < 2:
         return None
 
@@ -846,6 +853,7 @@ def analyze(
         closed,
         period=config.volume_mean_period,
         spike_mult=config.volume_spike_mult,
+        enabled=config.volume_available,
     )
 
     reference_facts = build_reference_facts(

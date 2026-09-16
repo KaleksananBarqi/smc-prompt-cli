@@ -52,6 +52,7 @@ These are absolute scope boundaries. Any implementation that crosses one is a de
 2. The strings `DOL`, `Draw on Liquidity`, `liquidity sweep`, `stop hunt`, `SSL`, `BSL` MUST NOT be emitted by any module. They exist only inside the static template body, which is copied verbatim.
 3. No module may import an LLM SDK, an image library (PIL/OpenCV), or an exchange trading client (spot/margin order APIs).
 4. `data_fetcher.py` may only call **read-only public market-data endpoints** (klines, ticker/price, exchangeInfo). No signed/private endpoints.
+5. **Data providers (Phase 6) may only call read-only public market-data endpoints.** `twelvedata_source.py` (`/time_series`, `/quote`) and `oanda_source.py` (`/v3/accounts`, `/v3/accounts/{id}/instruments`, `/v3/accounts/{id}/pricing`, `/v3/instruments/{i}/candles`) are **read-only**; no order, trade, or account-mutating route may ever be called. A credential grants read access to *data*, never the ability to trade — which keeps the "NO order execution / auto-trading" non-goal intact.
 
 > **Note (3-tier extension).** Extending the pipeline from two native tiers
 > (HTF + LTF) to three (HTF + MTF + LTF) **alters no non-goal** in this section.
@@ -97,9 +98,118 @@ smc-prompt BTCUSDT --input-csv candles.csv --mtf-file candles_4h.csv --ltf-file 
 | `--ltf-file` | no | path | — | Offline LTF candle CSV. Requires `--input-csv`; overrides the LTF series only. |
 | `--max-prompt-bytes` | no | int | — | **Hard post-render size limit (Phase 5, #11).** When the rendered prompt exceeds this many UTF-8 bytes the tool aborts with `ConfigError` (exit 2) **before** anything is written. Off by default. |
 | `--dry-run` | no | flag | off | **Dry run (Phase 5, #16).** Validate the config + symbol and print the resolved settings to stderr, then exit **without** fetching klines, rendering, or writing a file. Useful for CI / pre-flight checks. |
+| `--provider` | no | choice | `binance` | **Data provider (Phase 6).** One of `binance` / `twelvedata` / `oanda`. Binance serves crypto only; the FX providers make XAUUSD analyzable (§3.9). |
+| `--twelvedata-key` | no | str | env `TWELVEDATA_API_KEY` | Twelve Data API key. A missing key raises `ConfigError` (exit 2) before any request. |
+| `--oanda-token` | no | str | env `OANDA_API_TOKEN` | OANDA v20 API token. A missing token raises `ConfigError` (exit 2). |
+| `--oanda-account-id` | no | str | env `OANDA_ACCOUNT_ID` | Optional OANDA account id; auto-discovered from `/v3/accounts` when omitted. |
+| `--oanda-env` | no | choice | `practice` | OANDA environment: `practice` (free demo) or `live` (funded account). |
 | `--debug` | no | flag | off | Print stack traces; otherwise concise messages only |
 
 **Output contract:** the final prompt text is **always written to `./output/<symbol>_<timestamp>.md`** (the primary artifact) and then **best-effort copied to the clipboard**. A clipboard failure (headless env) is downgraded to a warning on stderr and does not change the exit code; a failure to write the `.md` file raises `OutputError` (exit 6). By default stdout is **empty** so the stdout stream never risks a truncated paste; passing `--stdout` additionally prints the prompt text to stdout. All notes, warnings, and errors go to stderr.
+
+---
+
+## 3.9 Data providers (Phase 6) — XAUUSD and other FX/metals
+
+### 3.9.1 Why Binance cannot serve XAUUSD
+
+Binance Spot lists no fiat/forex/metal instruments. `GET /api/v3/exchangeInfo?symbol=XAUUSD`
+returns an empty `symbols` array and `GET /api/v3/klines?symbol=XAUUSD` returns
+HTTP 400, so both paths raise `SymbolNotFoundError` (exit 3). The failure is
+**instrument-scoped, not host-scoped**, so `--base-url` cannot work around it.
+
+The tokenized-gold proxies (`XAUTUSDT`, `PAXGUSDT`) are **not** an acceptable
+substitute. They introduce a persistent peg premium/discount, a crypto
+order-book microstructure, and a 24/7 session with no weekend gap — all of which
+fabricate swings and FVGs that do not exist on the spot gold market. Analysing
+them would violate the `[FAKTA]` contract the prompt asserts.
+
+### 3.9.2 Provider abstraction
+
+A provider is any class exposing the existing fetcher-parity seam
+(`validate_symbol` / `fetch_klines` / `fetch_current_price` / `fetch_server_time`
+/ `price_notes` / `with_now`). The analysis pipeline is **unchanged**: it already
+consumes `Sequence[Candle]`. `provider_base.ProviderHttp` centralizes
+retry/backoff + host failover, and `provider_base` also owns the shared
+`price_within_band` / `price_sanity_warning` helpers so every network path
+degrades identically.
+
+| Provider | `--provider` | Instrument | `4h` native | Volume | Credential |
+|---|---|---|---|---|---|
+| Binance Spot | `binance` (default) | crypto | yes | real | none |
+| Twelve Data | `twelvedata` | FX/metals (`XAU/USD`) | yes | `"0"` | `--twelvedata-key` / `TWELVEDATA_API_KEY` |
+| OANDA v20 | `oanda` | FX/metals (`XAU_USD`) | yes | tick count | `--oanda-token` / `OANDA_API_TOKEN` |
+
+Both FX providers serve `4h` natively, so the default `1d` / `4h` / `1h` trio maps
+1:1 and no aggregation is performed.
+
+### 3.9.3 Symbol and interval mapping
+
+| Canonical | Twelve Data | OANDA |
+|---|---|---|
+| `XAUUSD` | `XAU/USD` | `XAU_USD` |
+| `EURUSD` | `EUR/USD` (6-letter FX heuristic) | `EUR_USD` |
+| `1d` / `4h` / `1h` | `1day` / `4h` / `1h` | `D` / `H4` / `H1` |
+
+An interval a provider does not support raises `ConfigError` (exit 2).
+
+`provider_base.aggregate_candles` exists for providers that lack a native tier
+(open = first, high = max, low = min, close = last, volume = sum; the leading
+partial bucket is dropped). It is **unused by the two providers shipped here**
+because both serve `4h` natively.
+
+### 3.9.4 Volume handling (critical correctness fix)
+
+`config.volume_available` is `False` for both FX providers:
+
+* **Twelve Data** reports `volume = "0"` for metals.
+* **OANDA's candle "volume" is a tick count**, not trade volume. Rendering it in
+  a column labelled `volume` would mislabel it as `[FAKTA]`, so the provider
+  emits `0`.
+
+When `volume_available` is `False`, `compute_relative_volume` returns `None` (the
+facts render `n/a` / `spike: unknown`) **and** the zero-volume delisted heuristic
+in `cli.run` is skipped. Without that second gate, every FX run would emit a
+false `[smc-prompt] WARN: Latest <k> candles have zero volume; XAUUSD may be
+delisted or halted`.
+
+### 3.9.5 Price precision without `exchangeInfo`
+
+Providers have no exchange metadata, so they synthesize the `PRICE_FILTER` entry
+shape that `cli._extract_tick_size` already understands:
+
+* Twelve Data: a `0.01` tick (2 dp, the metal convention).
+* OANDA: the venue's own `displayPrecision` (`XAU_USD` is typically 3 dp).
+
+This keeps price rendering on the existing tick-size code path rather than
+falling back to the magnitude rule.
+
+### 3.9.6 Timestamps, candle closure and the daily boundary
+
+* OANDA emits 9-digit nanosecond fractions; `provider_base.iso_to_utc` truncates
+  them to microseconds so Python 3.10's `datetime.fromisoformat` can parse them.
+* OANDA's `complete` flag is **authoritative** for candle closure; the host-clock
+  comparison is only a fallback when the field is absent.
+* Only Binance exposes an exchange clock. The FX providers return the host clock
+  from `fetch_server_time` by design (documented behaviour, not a warning
+  condition), so `GENERATED_AT_UTC` and closure rest on the host clock there.
+* **Spot gold's daily candle closes at 17:00 ET, not 00:00 UTC.** Daily swing
+  timestamps and the EQH/EQL tolerance window therefore differ from crypto. This
+  is intended: correct data for the correct instrument.
+
+### 3.9.7 Provider-agnostic provenance
+
+The prompt's provenance line must name the source that actually produced the
+data. Rather than fork the byte-frozen template, `{{provider}}` is a **render
+variable** (like `INCLUDE_ATR`), supplied by `template_renderer.render`:
+
+* `render(payload, include_atr, provider_name="Binance")` renders the template
+  once, passing the provider label as a render variable. It is deliberately
+  **not** a payload placeholder, because the unresolved-placeholder guard only
+  reports names present in the payload (so a provider name containing `{{` / `}}`
+  cannot false-positive).
+* The default `"Binance"` reproduces the original wording byte for byte, which is
+  why the frozen `GOLDEN_SHA256` / `GOLDEN_BYTES` are **unchanged** by this phase.
 
 ---
 
@@ -117,6 +227,12 @@ smc-prompt BTCUSDT --input-csv candles.csv --mtf-file candles_4h.csv --ltf-file 
 | Server time | `GET /api/v3/time` | none |
 
 - No API key. Base host configurable (`https://api.binance.com`), with fallback documented in §11 (region blocks).
+- **Providers (Phase 6).** The Binance endpoints above are the default path.
+  Selecting `--provider twelvedata` or `--provider oanda` swaps in a read-only
+  FX/metals source that shares the same public shape, so §4.2–§4.9 (swings,
+  structure, ATR, FVG, distances, volume) are unchanged. See §3.9 for the provider
+  contract, symbol/interval mapping, the volume-availability gate, synthetic
+  `tickSize`, and timestamp notes.
 - **Offline mode (Phase 4, #10).** Passing `--input-csv` (with optional
   `--htf-file` / `--mtf-file` / `--ltf-file`) switches the data source to the local
   `smc_prompt/csv_source.py` reader and performs **zero network access**. See
@@ -382,6 +498,10 @@ smc_prompt/
 ├── errors.py              # exception hierarchy (drives exit codes)
 ├── data_fetcher.py        # Binance REST client (klines, ticker, exchangeInfo) + retry/backoff
 ├── csv_source.py          # offline/local CSV data source (fetcher-parity, network-free) [#10]
+├── provider_base.py       # shared provider scaffolding: HTTP retry/failover, timestamps,
+│                          #   aggregation, price-band helpers [#Phase 6]
+├── twelvedata_source.py   # Twelve Data FX/metals source (XAU/USD, 4h native) [#Phase 6]
+├── oanda_source.py        # OANDA v20 source (XAU_USD, H4 native, complete flag) [#Phase 6]
 ├── structure_analyzer.py  # swing detection, classification, distance, ATR
 ├── template_renderer.py   # build placeholder dict + Jinja2 render
 ├── output.py              # write .md output file + best-effort clipboard (renamed)
@@ -1379,6 +1499,38 @@ Hindari klaim absolut ("pasti", "dijamin", "akan"). Gunakan kalibrasi probabilit
     emits three blocks. This is deliberate: a "how many tiers" runtime switch would
     reintroduce variable-arity complexity for no product benefit. Three intervals
     must be DISTINCT (validated in `build_config`; violation → `ConfigError`, exit 2).
+17. **XAUUSD requires an external provider (Phase 6).** Binance Spot lists no
+    fiat/forex/metal instruments, so XAUUSD cannot come from the default path. The
+    tokenized-gold proxies on Binance are explicitly **not** an acceptable
+    substitute (peg premium, crypto microstructure, 24/7 session) — see §3.9.1.
+    Mitigation: `--provider twelvedata` (free key, `4h` native) or `--provider oanda`
+    (free practice account, real spot `XAU_USD`, `H4` native). Both are read-only
+    (non-goal §2.1 rule 5 unchanged).
+18. **FX providers carry no usable volume.** Twelve Data returns `0` for metals and
+    OANDA's candle "volume" is a tick count, so `config.volume_available` is `False`
+    for both. This renders the volume facts `n/a` / `spike: unknown` **and** disables
+    the zero-volume delisted heuristic, which would otherwise warn on every run that
+    a perfectly tradable pair "may be delisted or halted" (§3.9.4). The trade-off is
+    disclosed: the prompt has no volume-based confirmation for FX/metals.
+19. **No exchange clock for the FX providers.** Only Binance exposes `/api/v3/time`.
+    Twelve Data and OANDA fall back to the host clock, so a skewed local clock can
+    misclassify the last candle as closed and shifts `GENERATED_AT_UTC`. OANDA
+    partially mitigates this by treating the venue's own `complete` flag as
+    authoritative (§3.9.6). Twelve Data has no equivalent flag, so its closure
+    decision rests entirely on the host clock — the same residual risk the Binance
+    host-clock fallback carries, but permanent rather than exceptional.
+20. **Spot-gold daily boundary differs from UTC midnight.** Gold closes at 17:00 ET,
+    so a `1d` candle is not the 00:00-UTC bucket crypto uses. Daily swing timestamps
+    and the `equal_levels_atr_mult × ATR` window therefore shift relative to a crypto
+    run. This is deliberate (correct market structure for the instrument) but it means
+    BTCUSDT and XAUUSD daily facts are not directly comparable bar-for-bar.
+21. **Provider credentials are a new configuration surface.** `--twelvedata-key` /
+    `--oanda-token` (plus the `TWELVEDATA_API_KEY` / `OANDA_API_TOKEN` environment
+    fallbacks) are read-only market-data credentials, but they are secrets: they must
+    not be committed, and an HTTP 401 is mapped to `ConfigError` (exit 2) so a bad
+    credential fails fast rather than burning the retry budget as `NetworkError`.
+    Twelve Data reports application errors inside an HTTP 200 envelope
+    (`status: "error"`), which the source inspects explicitly.
 
 ---
 

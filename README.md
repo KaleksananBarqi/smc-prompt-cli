@@ -1,11 +1,12 @@
 # smc-prompt
 
 `smc-prompt` adalah **CLI Python sekali-jalan (single-run)** yang mengambil data
-OHLC dari **Binance public REST API** (tanpa API key), menghitung **fakta
-struktural yang objektif dan mekanis** (lapisan `[FAKTA]`), menyuntikkan fakta
-tersebut ke dalam template prompt yang tetap, lalu **menulis prompt akhir ke
-berkas `.md` di `./output`**, **menyalinnya ke clipboard** (best-effort), dan
-opsional **mencetaknya ke terminal** lewat `--stdout`.
+OHLC dari **provider market data publik read-only** (Binance Spot secara default;
+Twelve Data atau OANDA untuk FX/logam), menghitung **fakta struktural yang
+objektif dan mekanis** (lapisan `[FAKTA]`), menyuntikkan fakta tersebut ke dalam
+template prompt yang tetap, lalu **menulis prompt akhir ke berkas `.md` di
+`./output`**, **menyalinnya ke clipboard** (best-effort), dan opsional
+**mencetaknya ke terminal** lewat `--stdout`.
 
 Alat ini adalah **utilitas penyiapan data (data-preparation utility)** untuk LLM
 teks di hilir. Ia **tidak melakukan penalaran apa pun** sendiri; seluruh
@@ -100,7 +101,15 @@ tinggal menjalankan satu perintah lalu menempelkan hasilnya ke LLM mana pun.
 - **`--dry-run` (Phase 5, #16)** — validasi konfigurasi + simbol lalu cetak
   pengaturan yang diresolusi ke **stderr**, tanpa fetch klines, render, atau
   menulis berkas (cocok untuk CI/pre-flight).
-- **Tanpa API key**, hanya endpoint **read-only public market data**.
+- **Dukungan XAUUSD / FX-logam (Phase 6)** — Binance Spot **tidak melisting**
+  instrumen fiat/forex/logam, sehingga XAUUSD tidak bisa diambil dari Binance.
+  Provider `twelvedata` (key gratis, **4h native**) dan `oanda` (akun practice
+  gratis, spot `XAU_USD` asli, `H4` native) menyajikan pair/logam sungguhan.
+  Pipeline analisis **tidak berubah**: provider hanyalah sumber data lain dengan
+  kontrak yang sama (`validate_symbol` / `fetch_klines` / `fetch_current_price` /
+  `fetch_server_time` / `price_notes` / `with_now`).
+- **Tanpa API key untuk Binance**, hanya endpoint **read-only public market data**
+  (provider FX opsional memerlukan key/token; lihat bagian XAUUSD di bawah).
 
 ## Non-Goals (batas keras)
 
@@ -552,6 +561,100 @@ Keluaran yang diharapkan:
 
 ---
 
+## Provider Data: Binance, Twelve Data, dan OANDA (Phase 6)
+
+### Kenapa XAUUSD tidak bisa diambil dari Binance
+
+Binance Spot **tidak melisting** instrumen fiat/forex/logam. `GET
+/api/v3/exchangeInfo?symbol=XAUUSD` mengembalikan `symbols: []` dan `GET
+/api/v3/klines?symbol=XAUUSD` mengembalikan HTTP 400, sehingga keduanya berujung
+`SymbolNotFoundError` (exit `3`). Ini masalah **instrumen**, bukan host — jadi
+`--base-url` tidak bisa menolong.
+
+**Jangan memakai `XAUTUSDT`/`PAXGUSDT` sebagai pengganti.** Itu token emas, bukan
+spot gold:
+
+- **Premium/diskon persisten** terhadap XAU/USD spot — inilah selisih "beberapa
+  point" yang terlihat.
+- **Mikrostruktur crypto** (orderbook tipis, wick dari trade token besar, drift
+  peg USDT/USD) → memunculkan **swing dan FVG hantu** yang tidak ada di pasar gold.
+- **Sesi berbeda** — gold spot tutup akhir pekan, Binance 24/7; boundary candle
+  `1d` pun bergeser (00:00 UTC vs 21:00/22:00 UTC), sehingga timestamp swing dan
+  ambang EQH/EQL ikut bergeser.
+
+### Provider yang tersedia
+
+| Provider | `--provider` | Instrumen | 4h native | Volume | Kredensial |
+|---|---|---|---|---|---|
+| Binance Spot | `binance` (default) | crypto | ya | ya | tidak perlu |
+| Twelve Data | `twelvedata` | FX & logam (`XAU/USD`) | ya | tidak (0) | API key gratis |
+| OANDA v20 | `oanda` | FX & logam (`XAU_USD`) | ya | tick count → dinolkan | token (akun practice gratis) |
+
+Keduanya menyajikan `4h` **native**, jadi trio default `1d` / `4h` / `1h` dipetakan
+1:1 dan **tidak ada agregasi** yang diperlukan.
+
+### Contoh: XAUUSD via Twelve Data
+
+Daftar API key gratis di <https://twelvedata.com>, lalu:
+
+```bash
+# Lewat flag
+smc-prompt XAUUSD --provider twelvedata --twelvedata-key "$TWELVEDATA_API_KEY"
+
+# Atau lewat environment variable (lebih nyaman untuk pemakaian rutin)
+export TWELVEDATA_API_KEY=xxxxx            # Windows: set TWELVEDATA_API_KEY=xxxxx
+smc-prompt XAUUSD --provider twelvedata
+```
+
+### Contoh: XAUUSD via OANDA
+
+Buat akun **practice** gratis, ambil token dari portal OANDA, lalu:
+
+```bash
+export OANDA_API_TOKEN=xxxxx               # token environment practice
+smc-prompt XAUUSD --provider oanda --oanda-env practice
+
+# OANDA live (butuh akun terdanai)
+smc-prompt XAUUSD --provider oanda --oanda-env live --oanda-token "$LIVE_TOKEN"
+```
+
+### Pemetaan simbol & interval
+
+| Kanonik | Twelve Data | OANDA |
+|---|---|---|
+| `XAUUSD` | `XAU/USD` | `XAU_USD` |
+| `EURUSD` | `EUR/USD` (heuristik FX 6 huruf) | `EUR_USD` |
+| `1d` | `1day` | `D` |
+| `4h` | `4h` | `H4` |
+| `1h` | `1h` | `H1` |
+
+Interval yang tidak didukung provider ditolak dengan `ConfigError` (exit `2`).
+
+### Perbedaan perilaku yang perlu diketahui
+
+- **Fakta volume dinonaktifkan** untuk Twelve Data dan OANDA (`volume_available=False`),
+  sehingga baris volume dirender `n/a` / `spike: unknown`. Alasannya: Twelve Data
+  melaporkan `0` untuk logam, sementara "volume" OANDA adalah **hitungan tick**,
+  bukan volume transaksi — menampilkannya di kolom `volume` akan salah label
+  sebagai `[FAKTA]`. Penonaktifan ini juga mematikan heuristik **zero-volume
+  "delisted"**; tanpa itu setiap run gold akan memunculkan peringatan palsu
+  "may be delisted or halted".
+- **Presisi harga** diambil dari `PRICE_FILTER.tickSize` sintetis: Twelve Data
+  memakai konvensi 2 dp logam, OANDA memakai `displayPrecision` venue (biasanya
+  3 dp untuk `XAU_USD`).
+- **Waktu server** — hanya Binance yang punya endpoint jam bursa; provider FX
+  memakai jam host untuk keputusan candle closed dan `GENERATED_AT_UTC`. Khusus
+  OANDA, flag `complete` dari venue dipakai langsung sebagai penentu candle
+  tertutup (otoritatif, bukan perbandingan jam).
+- **Boundary candle harian** — gold spot menutup pada 17:00 ET, bukan 00:00 UTC,
+  sehingga timestamp swing harian dan ambang EQH/EQL bergeser relatif terhadap
+  candle crypto. Ini disengaja: data yang benar untuk instrumen yang benar.
+- **Baris provenance prompt** kini mengikuti provider terpilih, mis.
+  `live market data API (Twelve Data)` — template tetap provider-agnostic, dan
+  output Binance **byte-identik** dengan sebelumnya.
+
+---
+
 ## Mode Offline (Data Lokal CSV)
 
 Mulai Phase 4, `smc-prompt` dapat dijalankan **tanpa akses jaringan sama
@@ -672,6 +775,9 @@ smc_prompt/
 ├── models.py              # dataclass / kontrak payload bertipe
 ├── errors.py              # hierarki exception (memetakan exit code) + warning non-fatal
 ├── data_fetcher.py        # klien REST Binance (klines/ticker/exchangeInfo/time) + retry/backoff + failover
+├── provider_base.py       # scaffolding provider bersama: HTTP retry/failover, timestamp, agregasi, price-band
+├── twelvedata_source.py   # data source Twelve Data (XAU/USD, 4h native)
+├── oanda_source.py        # data source OANDA v20 (XAU_USD, H4 native, flag `complete`)
 ├── structure_analyzer.py  # deteksi swing, klasifikasi, jarak, ATR
 ├── template_renderer.py   # pembangun placeholder + render Jinja2
 ├── output.py              # tulis berkas .md + salin clipboard (best-effort)

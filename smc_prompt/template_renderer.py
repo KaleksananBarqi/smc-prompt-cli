@@ -9,6 +9,7 @@ Byte-stability contract (spec §8.1):
 
 from __future__ import annotations
 
+import html
 import re
 from decimal import Decimal
 from datetime import datetime
@@ -51,6 +52,15 @@ VOLUME_SPIKE_UNKNOWN = "unknown"
 #: Name of the boolean the template uses to toggle the two ATR lines. Exposed
 #: as a constant so tests/other modules can reference the exact spelling.
 INCLUDE_ATR_VAR = "INCLUDE_ATR"
+
+#: Name of the render variable carrying the data provider's display name, used
+#: by the template's provenance line. It is a *render variable* rather than a
+#: placeholder because the provider is chosen at runtime, which lets one
+#: byte-frozen template serve Binance, Twelve Data and OANDA unchanged. It is
+#: deliberately NOT added to ``payload`` / ``REQUIRED_PLACEHOLDERS``: the
+#: unresolved-placeholder guard only reports names present in the payload, so a
+#: provider value that happens to contain ``{{`` / ``}}`` cannot false-positive.
+PROVIDER_NAME_VAR = "provider"
 
 #: Matches a Jinja substitution tag naming a single placeholder, e.g. ``{{PAIR}}``
 #: or ``{{ PAIR }}``. Used by :func:`check_unresolved_placeholders` instead of a
@@ -603,19 +613,38 @@ def check_unresolved_placeholders(
     return sorted({name for name in found if name in declared})
 
 
-def render(payload: dict[str, str], *, include_atr: bool = True) -> RenderedPrompt:
+def render(
+    payload: dict[str, str],
+    *,
+    include_atr: bool = True,
+    provider_name: str = "Binance",
+) -> RenderedPrompt:
     """Render the template with strict undefined handling.
 
     The two ATR lines are wrapped in ``{% if INCLUDE_ATR %}`` in the template;
     ``include_atr`` is passed as a render variable so ``--no-atr`` is driven by
     Jinja control flow rather than brittle line-string filtering. The output is
     byte-stable in both cases.
+
+    ``provider_name`` is the data source named on the prompt's provenance line
+    (e.g. ``Twelve Data``). It is a render variable rather than a payload
+    placeholder so the frozen template stays provider-agnostic; the default
+    reproduces the original Binance wording byte for byte.
     """
 
     env = _template_env()
     try:
         template = env.from_string(template_source())
-        text = template.render(**{**payload, INCLUDE_ATR_VAR: include_atr})
+        text = template.render(
+            **{
+                **payload,
+                INCLUDE_ATR_VAR: include_atr,
+                # A provider name is a literal string, never markup, and the
+                # template is autoescape=False; escaping here is what keeps a
+                # provider label from ever being read as a Jinja tag.
+                PROVIDER_NAME_VAR: html.escape(provider_name, quote=False),
+            }
+        )
     except TemplateError as exc:
         raise SmcPromptError(f"Template rendering failed: {exc}.")
 

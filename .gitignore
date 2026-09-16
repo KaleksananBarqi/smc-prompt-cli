@@ -35,6 +35,12 @@ output/
 # Logs
 *.log
 
+# Provider credentials (never commit API keys/tokens)
+.env
+.env.*
+*.key.txt
+secrets.txt
+
 # --- AL / Dynamics 365 Business Central (existing remote config) ---
 #Template for AL projects for Dynamics 365 Business Central
 #launch.json folder
