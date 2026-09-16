@@ -141,6 +141,8 @@ tinggal menjalankan satu perintah lalu menempelkan hasilnya ke LLM mana pun.
   - [`pyperclip`](https://pypi.org/project/pyperclip/) `>= 1.8.2`
   - [`click`](https://pypi.org/project/click/) `>= 8.1.7`
   - [`jinja2`](https://pypi.org/project/jinja2/) `>= 3.1.2`
+  - [`python-dotenv`](https://pypi.org/project/python-dotenv/) `>= 1.0.0`
+    (membaca berkas `.env` kredensial opsional; lihat "Kredensial via `.env`")
 - Catatan clipboard: di Linux headless, `pyperclip` membutuhkan `xclip`/`xsel`.
   Bila tidak ada, penyalinan dilewati dengan peringatan; berkas `.md` di
   `--output-dir` tetap selalu tertulis (exit code tetap `0`).
@@ -184,7 +186,8 @@ smc-prompt <SYMBOL> [--htf-interval I] [--mtf-interval I] [--ltf-interval I]
                      [--distance-reference {nearest,most-recent}] [--no-atr]
                      [--base-url URL] [--output-dir PATH] [--stdout]
                      [--input-csv FILE] [--htf-file FILE] [--mtf-file FILE] [--ltf-file FILE]
-                     [--max-prompt-bytes BYTES] [--dry-run] [--debug]
+                     [--max-prompt-bytes BYTES] [--dry-run]
+                     [--env-file PATH] [--no-dotenv] [--debug]
 ```
 
 Entry point yang tersedia:
@@ -227,6 +230,8 @@ dan [`smc_prompt/config.py`](smc_prompt/config.py).
 | `--ltf-file` | `path` (file) | — | CSV candle LTF untuk mode offline. **Wajib** disertai `--input-csv`; hanya menimpa seri LTF. |
 | `--max-prompt-bytes` | `int` | — (nonaktif) | **Batas keras ukuran prompt (Phase 5).** Bila prompt hasil render melebihi jumlah byte ini, tool membatalkan dengan `ConfigError` (exit code `2`) **sebelum** menulis berkas. Nonaktif secara default. |
 | `--dry-run` | flag | off | **Dry run (Phase 5).** Validasi konfigurasi + simbol lalu cetak pengaturan yang diresolusi ke **stderr**, tanpa fetch klines, render, atau menulis berkas. |
+| `--env-file` | `path` (file) | `.env` | **Kredensial (Phase 6).** Berkas `.env` tempat kredensial provider dibaca. Tidak pernah menimpa variabel yang sudah ada di shell (prioritas: flag > environment > `.env`). Lihat "Kredensial via `.env`". |
+| `--no-dotenv` | flag | off | **Kredensial (Phase 6).** Lewati pemuatan `.env` sepenuhnya. Berguna untuk CI dan debugging agar berkas lokal tidak diam-diam mengubah hasil run. |
 | `--debug` | flag | off | Cetak stack trace saat error. |
 | `--version` | flag | — | Tampilkan versi program lalu keluar. |
 | `-h`, `--help` | flag | — | Tampilkan bantuan lalu keluar. |
@@ -720,10 +725,68 @@ memberikannya tanpa `--input-csv` akan gagal dengan exit code `2`.
 
 ## Konfigurasi
 
-`smc-prompt` **tidak membaca variabel lingkungan (environment variable)** apa
-pun. Semua nilai non-CLI adalah konstanta default di
+Secara default `smc-prompt` **tidak memerlukan variabel lingkungan apa pun** —
+semua nilai tuning adalah konstanta di
 [`smc_prompt/config.py`](smc_prompt/config.py) yang dapat diubah di level kode
-(API Python), bukan melalui CLI atau env var.
+(API Python). Pengecualiannya hanya **kredensial provider** FX/logam (Phase 6),
+yang bersifat rahasia dan karena itu dibaca dari lingkungan:
+
+| Variabel | Dipakai oleh | Wajib? |
+|---|---|---|
+| `TWELVEDATA_API_KEY` | `--provider twelvedata` | ya, untuk provider ini |
+| `OANDA_API_TOKEN` | `--provider oanda` | ya, untuk provider ini |
+| `OANDA_ACCOUNT_ID` | `--provider oanda` | tidak (ditemukan otomatis) |
+
+Binance (provider default) tidak memerlukan kredensial sama sekali.
+
+### Kredensial via `.env` (opsional, direkomendasikan)
+
+Alih-alih meng-`export` key di setiap shell baru, taruh kredensial di berkas
+`.env`. CLI memuatnya otomatis saat dijalankan.
+
+**Langkah setup:**
+
+```bash
+# 1. Salin templat
+copy .env.example .env          # Windows cmd
+# cp .env.example .env          # macOS / Linux
+# Copy-Item .env.example .env   # Windows PowerShell
+
+# 2. Isi nilainya (buka .env di editor)
+TWELVEDATA_API_KEY=key-anda-di-sini
+
+# 3. Jalankan seperti biasa
+smc-prompt XAUUSD --provider twelvedata
+```
+
+**Urutan prioritas (yang lebih atas menang):**
+
+```
+flag CLI  >  environment shell  >  file .env
+```
+
+Artinya: variabel yang sudah Anda `export`/`set` di shell **tidak akan ditimpa**
+oleh isi `.env`, dan flag `--twelvedata-key` tetap yang paling kuat. Jadi `.env`
+aman dipakai sebagai fallback tanpa mengganggu override sesekali.
+
+**Flag terkait:**
+
+| Flag | Kegunaan |
+|---|---|
+| `--env-file PATH` | Memakai berkas `env` lain, bukan `.env` di direktori kerja. |
+| `--no-dotenv` | Mematikan pemuatan `.env` sama sekali (cocok untuk CI/debugging). |
+
+**Catatan penting:**
+
+- `.env` **tidak akan ter-commit** (lihat [`.gitignore`](.gitignore)); templat
+  [`.env.example`](.env.example) justru memang di-commit — jangan pernah menaruh key asli di sana.
+- Pemuatan `.env` hanya terjadi di entry point CLI, **bukan** di jalur API Python
+  ([`smc_prompt/cli.py`](smc_prompt/cli.py) `main()`, bukan `run()`). Ini menjaga
+  test suite tetap hermetik dan bebas dari berkas lokal.
+- Bila `.env` ada **tetapi** `python-dotenv` tidak terpasang, CLI memunculkan
+  `WARN` dan tetap berjalan (exit code `0`) — tidak pernah gagal diam-diam.
+- Bila key tetap kosong setelah semua sumber, provider gagal cepat dengan
+  `ConfigError` (exit `2`).
 
 Konstanta penting (`smc_prompt/config.py`):
 

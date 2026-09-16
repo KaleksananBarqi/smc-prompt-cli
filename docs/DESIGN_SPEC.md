@@ -1532,6 +1532,17 @@ Hindari klaim absolut ("pasti", "dijamin", "akan"). Gunakan kalibrasi probabilit
     Twelve Data reports application errors inside an HTTP 200 envelope
     (`status: "error"`), which the source inspects explicitly.
 
+    A third, weaker source was added later: an optional `.env` file
+    (`smc_prompt/env_loader.py`, `--env-file` / `--no-dotenv`). It establishes the
+    precedence **flag > environment > .env**, enforced by `load_dotenv(override=False)`
+    so an exported variable is never rewritten. Two properties are deliberate:
+    (a) loading happens in `cli.main()` only, never in `cli.run()`, keeping the
+    programmatic API and the hermetic test suite free of ambient files; and
+    (b) a present `.env` with `python-dotenv` missing degrades to a WARN (exit 0)
+    rather than a silent skip or a hard failure. The committable template is
+    `.env.example`, which `.gitignore` re-includes via `!.env.example` after the
+    `.env.*` glob.
+
 ---
 
 ## 15. Deliverables Checklist (brief section 10)

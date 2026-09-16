@@ -38,6 +38,10 @@ output/
 # Provider credentials (never commit API keys/tokens)
 .env
 .env.*
+# ...but the committable template must survive the .env.* glob above. A
+# negation cannot re-include a file whose parent directory is excluded, so
+# ordering matters: this line must stay AFTER the patterns it overrides.
+!.env.example
 *.key.txt
 secrets.txt
 

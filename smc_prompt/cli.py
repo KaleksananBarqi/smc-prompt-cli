@@ -18,6 +18,7 @@ import click
 from . import __version__, config as cfg
 from .csv_source import LocalCsvSource
 from .data_fetcher import DataFetcher
+from .env_loader import load_env_file
 from .errors import (
     ConfigError,
     DelistedWarning,
@@ -44,6 +45,12 @@ PROG = "smc-prompt"
 TWELVEDATA_KEY_ENV = "TWELVEDATA_API_KEY"
 OANDA_TOKEN_ENV = "OANDA_API_TOKEN"
 OANDA_ACCOUNT_ENV = "OANDA_ACCOUNT_ID"
+
+#: Credential precedence, strongest first. Documented here because it is split
+#: across two mechanisms: the flag beats the environment inside
+#: :func:`_resolve_credentials`, and the shell environment beats ``.env``
+#: because :func:`load_env_file` never overrides existing variables.
+CREDENTIAL_PRECEDENCE = "CLI flag > environment variable > .env file"
 
 
 @dataclass(frozen=True)
@@ -93,6 +100,21 @@ def _env_value(name: str) -> str | None:
 
     value = os.environ.get(name)
     return value.strip() if value and value.strip() else None
+
+
+def _load_dotenv_or_warn(env_file: str | None, *, no_dotenv: bool) -> None:
+    """Populate ``os.environ`` from ``.env``, warning instead of failing.
+
+    Called from :func:`main` only — never from :func:`run`. The test suite
+    drives ``run()`` directly, so keeping the loader at the CLI boundary leaves
+    the suite hermetic and stops a developer's real ``.env`` from leaking into
+    it. A ``.env`` that exists while ``python-dotenv`` is missing produces a
+    WARN and the run continues (exit code stays ``0``).
+    """
+
+    result = load_env_file(env_file, enabled=not no_dotenv)
+    if result.is_warning:
+        _warn(result.warning_message())
 
 
 def _resolve_credentials(
@@ -757,6 +779,27 @@ def run(
         "WITHOUT fetching klines or writing a file (CI/pre-flight)."
     ),
 )
+@click.option(
+    "--env-file",
+    "env_file",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help=(
+        "Path to a .env file holding provider credentials. Defaults to '.env' "
+        "in the working directory. Never overrides variables already set in "
+        "the shell (precedence: flag > environment > .env)."
+    ),
+)
+@click.option(
+    "--no-dotenv",
+    "no_dotenv",
+    is_flag=True,
+    default=False,
+    help=(
+        "Skip loading .env entirely. Useful for CI and for debugging so a "
+        "stray local file cannot change the run."
+    ),
+)
 @click.option("--debug", is_flag=True, default=False, help="Print stack traces.")
 @click.version_option(version=__version__, prog_name=PROG)
 def main(
@@ -784,11 +827,18 @@ def main(
     oanda_token: str | None,
     oanda_account_id: str | None,
     oanda_env: str,
+    env_file: str | None,
+    no_dotenv: bool,
     debug: bool,
 ) -> None:
     """CLI entrypoint. Parses args, then delegates to :func:`run`."""
 
     _ensure_utf8_streams()
+
+    # .env is a convenience layer UNDER the shell environment (see
+    # CREDENTIAL_PRECEDENCE): loading happens here, before run(), so the
+    # programmatic run() path and the test suite stay free of ambient files.
+    _load_dotenv_or_warn(env_file, no_dotenv=no_dotenv)
 
     base_urls = cfg.DEFAULT_BASE_URLS
     if base_url:
