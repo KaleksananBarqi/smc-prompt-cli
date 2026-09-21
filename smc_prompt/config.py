@@ -296,6 +296,26 @@ PROMPT_BYTES_PER_TOKEN: int = 4
 MIN_CANDLES: int = 10
 MIN_SWING_LOOKBACK: int = 3
 
+#: Review / candles-only mode defaults & bounds.
+DEFAULT_REVIEW_CANDLES: int = 30
+DEFAULT_REVIEW_INTERVAL: str = "1h"
+MIN_REVIEW_CANDLES: int = 5
+MAX_REVIEW_CANDLES: int = 500
+
+
+def validate_review_candles(count: int) -> int:
+    """Validate review candle count (must be between MIN_REVIEW_CANDLES and MAX_REVIEW_CANDLES)."""
+
+    if count < MIN_REVIEW_CANDLES:
+        raise ConfigError(
+            f"--review-candles must be >= {MIN_REVIEW_CANDLES} (got {count})."
+        )
+    if count > MAX_REVIEW_CANDLES:
+        raise ConfigError(
+            f"--review-candles must be <= {MAX_REVIEW_CANDLES} (got {count})."
+        )
+    return count
+
 #: Valid values for ``--distance-reference``.
 DISTANCE_REFERENCE_NEAREST: str = "nearest"
 DISTANCE_REFERENCE_MOST_RECENT: str = "most-recent"

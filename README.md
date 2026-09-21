@@ -230,6 +230,9 @@ dan [`smc_prompt/config.py`](smc_prompt/config.py).
 | `--ltf-file` | `path` (file) | — | CSV candle LTF untuk mode offline. **Wajib** disertai `--input-csv`; hanya menimpa seri LTF. |
 | `--max-prompt-bytes` | `int` | — (nonaktif) | **Batas keras ukuran prompt (Phase 5).** Bila prompt hasil render melebihi jumlah byte ini, tool membatalkan dengan `ConfigError` (exit code `2`) **sebelum** menulis berkas. Nonaktif secara default. |
 | `--dry-run` | flag | off | **Dry run (Phase 5).** Validasi konfigurasi + simbol lalu cetak pengaturan yang diresolusi ke **stderr**, tanpa fetch klines, render, atau menulis berkas. |
+| `--candles-only` (atau `--review`) | flag | off | **Mode Post-Trade Review.** Hanya mengekspor data candle mentah (OHLCV) dan ringkasan pergerakan harga sesi ke berkas `.md` tanpa menyertakan template prompt analisis SMC pre-trade. |
+| `--review-interval` | interval Binance | `1h` | Interval candle untuk mode review (misal `15m`, `1h`, `4h`). |
+| `--review-candles` | `int` (5–500) | `30` | Jumlah candle closed yang diekspor pada mode review. |
 | `--env-file` | `path` (file) | `.env` | **Kredensial (Phase 6).** Berkas `.env` tempat kredensial provider dibaca. Tidak pernah menimpa variabel yang sudah ada di shell (prioritas: flag > environment > `.env`). Lihat "Kredensial via `.env`". |
 | `--no-dotenv` | flag | off | **Kredensial (Phase 6).** Lewati pemuatan `.env` sepenuhnya. Berguna untuk CI dan debugging agar berkas lokal tidak diam-diam mengubah hasil run. |
 | `--debug` | flag | off | Cetak stack trace saat error. |
@@ -525,6 +528,27 @@ Keluaran yang diharapkan bila terlampaui:
 Tanpa `--max-prompt-bytes`, hanya ambang lunak `PROMPT_BYTES_WARN`
 (default `120000` byte) yang memunculkan `[smc-prompt] WARN:` berisi jumlah byte
 dan perkiraan token; exit code tetap `0`.
+
+#### 13d. Mode Post-Trade Review — ekspor data candle & jurnal tanpa prompt
+
+Digunakan setelah posisi di-entry untuk mengevaluasi jalannya trade (*post-review* / jurnal). Mode ini **hanya mengekspor data candle mentah (OHLCV)** dan **ringkasan pergerakan harga sesi** ke berkas `.md`, tanpa memuat teks instruksi analisis SMC pre-trade.
+
+```bash
+# Default: 30 candle terakhir pada interval 1h
+smc-prompt BTCUSDT --candles-only
+
+# Kustomisasi interval dan jumlah candle
+smc-prompt BTCUSDT --candles-only --review-interval 15m --review-candles 50
+
+# Alias --review juga didukung
+smc-prompt ETHUSDT --review --review-interval 4h --review-candles 20
+```
+
+Berkas ditulis ke `<output_dir>/<SYMBOL>-REVIEW-<TIMESTAMP>.md` dan disalin ke clipboard. Berkas berisi:
+- Metadata & rentang waktu candle.
+- Ringkasan statistik harga (Open pertama, Close terakhir, Net change %, Highest high, Lowest low, Total range).
+- Formulir checklist jurnal trading (Arah Posisi, Entry, SL, TP, Outcome, Evaluasi).
+- Tabel CSV candle mentah siap pakai.
 
 #### 14. Contoh kegagalan yang umum (beserta exit code)
 

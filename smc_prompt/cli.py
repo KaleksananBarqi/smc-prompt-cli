@@ -30,6 +30,7 @@ from .errors import (
 from .oanda_source import OandaSource
 from .output import deliver
 from .provider_base import price_sanity_warning
+from .review_renderer import render_review_markdown
 from .twelvedata_source import TwelveDataSource
 from .structure_analyzer import (
     analyze,
@@ -215,6 +216,9 @@ def _print_resolved_settings(
     ltf_file: str | None,
     print_stdout: bool,
     max_prompt_bytes: int | None,
+    candles_only: bool = False,
+    review_interval: str = cfg.DEFAULT_REVIEW_INTERVAL,
+    review_candles: int = cfg.DEFAULT_REVIEW_CANDLES,
 ) -> None:
     """Print the resolved run settings for ``--dry-run`` (Phase 5, #16).
 
@@ -232,6 +236,21 @@ def _print_resolved_settings(
         source = (
             f"{source} (HTF={htf_file}, MTF={mtf_file}, LTF={ltf_file})"
         )
+
+    if candles_only:
+        lines = [
+            f"[{PROG}] DRY RUN — review mode, no file written, no klines fetched.",
+            f"[{PROG}] symbol={config.symbol}",
+            f"[{PROG}] provider={config.provider}",
+            f"[{PROG}] data source={source}",
+            f"[{PROG}] review_interval={review_interval} ({cfg.interval_label(review_interval)})",
+            f"[{PROG}] review_candles={review_candles}",
+            f"[{PROG}] output_dir={config.output_dir} stdout={print_stdout}",
+        ]
+        for line in lines:
+            click.echo(line, err=True)
+        return
+
     lines = [
         f"[{PROG}] DRY RUN — no file written, no klines fetched.",
         f"[{PROG}] symbol={config.symbol}",
@@ -291,12 +310,12 @@ def _prompt_size_notes(text: str, config: cfg.Config) -> list[str]:
 def run(
     symbol: str,
     *,
-    htf_candles: int,
-    ltf_candles: int,
-    swing_lookback: int,
-    distance_reference: str,
-    include_atr: bool,
-    output_dir: str,
+    htf_candles: int = cfg.DEFAULT_HTF_CANDLES,
+    ltf_candles: int = cfg.DEFAULT_LTF_CANDLES,
+    swing_lookback: int = cfg.DEFAULT_SWING_LOOKBACK,
+    distance_reference: str = cfg.DISTANCE_REFERENCE_NEAREST,
+    include_atr: bool = True,
+    output_dir: str = cfg.DEFAULT_OUTPUT_DIR,
     htf_interval: str = cfg.HTF_INTERVAL,
     mtf_candles: int = cfg.DEFAULT_MTF_CANDLES,
     mtf_interval: str = cfg.MTF_INTERVAL,
@@ -314,8 +333,22 @@ def run(
     oanda_token: str | None = None,
     oanda_account_id: str | None = None,
     oanda_env: str = cfg.OANDA_ENV_PRACTICE,
+    candles_only: bool = False,
+    review_interval: str = cfg.DEFAULT_REVIEW_INTERVAL,
+    review_candles: int = cfg.DEFAULT_REVIEW_CANDLES,
 ) -> RunResult:
     """Chain fetch -> analyze -> render -> output. Raises on any failure."""
+
+    if candles_only:
+        cfg.validate_interval(review_interval, flag="--review-interval")
+        cfg.provider_interval(provider, review_interval)
+        cfg.validate_review_candles(review_candles)
+        if review_interval not in (htf_interval, mtf_interval, ltf_interval):
+            ltf_interval = review_interval
+            if ltf_interval == mtf_interval:
+                mtf_interval = "4h" if ltf_interval != "4h" else "2h"
+            if ltf_interval == htf_interval:
+                htf_interval = "1d" if ltf_interval != "1d" else "1w"
 
     key, token, account_id = _resolve_credentials(
         twelvedata_key, oanda_token, oanda_account_id
@@ -359,6 +392,9 @@ def run(
             ltf_file=offline_ltf,
             print_stdout=print_stdout,
             max_prompt_bytes=max_prompt_bytes,
+            candles_only=candles_only,
+            review_interval=review_interval,
+            review_candles=review_candles,
         )
         return RunResult("", "", False, False, (), dry_run=True)
 
@@ -425,6 +461,69 @@ def run(
             )
     if server_time is not None:
         fetcher = fetcher.with_now(server_time)
+
+    # Post-trade review / candles-only fast-path
+    if candles_only:
+        for message in warnings:
+            _warn(message)
+
+        fetch_limit = min(review_candles + 20, cfg.FETCH_LIMIT_MAX)
+        raw_candles = fetcher.fetch_klines(review_interval, fetch_limit)
+        closed_candles = [c for c in raw_candles if c.is_closed]
+
+        if len(closed_candles) < review_candles:
+            warn_msg = (
+                f"Only {len(closed_candles)} closed {review_interval} candles "
+                f"available (requested {review_candles}). "
+                f"Reduced table to {len(closed_candles)}."
+            )
+            warnings.append(warn_msg)
+            _warn(warn_msg)
+
+        selected_candles = (
+            closed_candles[-review_candles:]
+            if len(closed_candles) >= review_candles
+            else closed_candles
+        )
+        if not selected_candles:
+            raise ConfigError(
+                f"No closed candles available for {config.symbol} at {review_interval}."
+            )
+
+        generated_at = server_time or datetime.now(timezone.utc)
+        review_text = render_review_markdown(
+            symbol=config.symbol,
+            interval=review_interval,
+            candles=selected_candles,
+            provider_label=config.provider_label,
+            generated_at=generated_at,
+            price_format=config.price_format,
+        )
+
+        if print_stdout:
+            click.echo(review_text, nl=False)
+
+        result = deliver(
+            review_text,
+            symbol=config.symbol,
+            output_dir=config.output_dir,
+            moment=generated_at,
+            is_review=True,
+        )
+        output_path = str(result.output_path)
+        click.echo(f"[{PROG}] Candle review written to {output_path}.", err=True)
+        if result.clipboard_warning:
+            _warn(result.clipboard_warning)
+        else:
+            click.echo(f"[{PROG}] Candle review copied to clipboard.", err=True)
+
+        return RunResult(
+            review_text,
+            output_path,
+            result.copied_to_clipboard,
+            print_stdout,
+            tuple(warnings),
+        )
 
     htf_raw = fetcher.fetch_klines(config.htf_interval, config.htf_fetch_limit)
     mtf_raw = fetcher.fetch_klines(config.mtf_interval, config.mtf_fetch_limit)
@@ -780,6 +879,33 @@ def run(
     ),
 )
 @click.option(
+    "--candles-only",
+    "--review",
+    "candles_only",
+    is_flag=True,
+    default=False,
+    help=(
+        "Export raw closed candles and session price metrics to .md without "
+        "the SMC/ICT prompt template (for post-trade review / journaling)."
+    ),
+)
+@click.option(
+    "--review-interval",
+    "review_interval",
+    type=str,
+    default=cfg.DEFAULT_REVIEW_INTERVAL,
+    show_default=True,
+    help="Candle interval for --candles-only review mode (e.g. 1h, 15m, 4h).",
+)
+@click.option(
+    "--review-candles",
+    "review_candles",
+    type=int,
+    default=cfg.DEFAULT_REVIEW_CANDLES,
+    show_default=True,
+    help="Number of closed candles to export in --candles-only review mode (>= 5).",
+)
+@click.option(
     "--env-file",
     "env_file",
     type=click.Path(dir_okay=False),
@@ -827,6 +953,9 @@ def main(
     oanda_token: str | None,
     oanda_account_id: str | None,
     oanda_env: str,
+    candles_only: bool,
+    review_interval: str,
+    review_candles: int,
     env_file: str | None,
     no_dotenv: bool,
     debug: bool,
@@ -873,6 +1002,9 @@ def main(
             oanda_token=oanda_token,
             oanda_account_id=oanda_account_id,
             oanda_env=oanda_env,
+            candles_only=candles_only,
+            review_interval=review_interval,
+            review_candles=review_candles,
         )
     except SmcPromptError as exc:
         _error(str(exc))

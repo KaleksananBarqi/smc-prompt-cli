@@ -39,16 +39,24 @@ class DeliveryResult:
         )
 
 
-def make_output_path(symbol: str, output_dir: str, moment: datetime) -> Path:
-    """``<output_dir>/<SYMBOL>-<YYYY-MM-DD-HH-MM-SS-UTC>.md``.
+def make_output_path(
+    symbol: str,
+    output_dir: str,
+    moment: datetime,
+    *,
+    is_review: bool = False,
+) -> Path:
+    """``<output_dir>/<SYMBOL>-[REVIEW-]<YYYY-MM-DD-HH-MM-SS-UTC>.md``.
 
     The stamp is always normalized to UTC and uses hyphen separators (no
     colons), so the filename is filesystem-safe on Windows and POSIX. Example:
-    ``EURUSD-2026-09-14-06-06-32-UTC.md``.
+    ``EURUSD-2026-09-14-06-06-32-UTC.md`` or
+    ``EURUSD-REVIEW-2026-09-14-06-06-32-UTC.md``.
     """
 
     stamp = cfg.fmt_output_stamp_hyphen(moment)
-    return Path(output_dir) / f"{symbol.upper()}-{stamp}.md"
+    prefix = f"{symbol.upper()}-REVIEW" if is_review else symbol.upper()
+    return Path(output_dir) / f"{prefix}-{stamp}.md"
 
 
 def copy_to_clipboard(text: str) -> None:
@@ -86,11 +94,15 @@ def deliver(
     symbol: str,
     output_dir: str = cfg.DEFAULT_OUTPUT_DIR,
     moment: datetime | None = None,
+    is_review: bool = False,
 ) -> DeliveryResult:
-    """Write the prompt to a ``.md`` file, then best-effort copy to clipboard."""
+    """Write the text to a ``.md`` file, then best-effort copy to clipboard."""
 
     path = make_output_path(
-        symbol, output_dir, moment or datetime.now(timezone.utc)
+        symbol,
+        output_dir,
+        moment or datetime.now(timezone.utc),
+        is_review=is_review,
     )
     write_output_file(path, text)
 
@@ -101,3 +113,4 @@ def deliver(
         clipboard_error = str(exc)
 
     return DeliveryResult(path, clipboard_error is None, clipboard_error)
+
