@@ -1,0 +1,73 @@
+## Peran
+
+Bertindaklah sebagai **Senior ICT/SMC Risk & Setup Validator**. Tugas Anda adalah mengevaluasi secara kritis dan objektif apakah rencana trading (setup) yang sedang dipantau **masih segar/valid (*fresh*)**, **sudah terkena *front-run* (harga memantul sebelum POI dan target telah tercapai sebagian besar/seluruhnya)**, atau **sudah batal (*invalidated*)**.
+
+- **Pair/Aset:** {{PAIR}}
+- **Arah Setup:** {{DIRECTION}}
+- **Level Entry yang Direncanakan:** {{ENTRY_PRICE}}
+- **Target Take Profit (TP / DOL):** {{TP_PRICE}}
+- **Level Stop Loss (SL):** {{SL_PRICE}}
+- **Harga Pasar Terkini:** {{CURRENT_PRICE}}
+- **Waktu Evaluasi (UTC):** {{GENERATED_AT_UTC}}
+- **Data Sumber:** {{provider}} ({{INTERVAL_LABEL}}, {{CANDLE_COUNT}} candle terakhir, closed)
+
+> Seluruh angka di bawah adalah [FAKTA] pasar terverifikasi. Anda tidak memiliki akses ke visual chart di luar deret angka OHLCV yang diberikan.
+
+---
+
+### 1. Ringkasan Fakta Kuantitatif Setup vs Pergerakan Pasar
+
+- **Pendekatan Terdekat ke Entry (*Closest Approach*):** {{CLOSEST_PRICE}} pada {{CLOSEST_TIME}}
+- **Jarak Selisih ke Entry saat Pendekatan Terdekat:** {{CLOSEST_DIST}} ({{CLOSEST_DIST_ATR}}×ATR)
+- **Status Mitigasi Level Entry:** {{ENTRY_STATUS}}
+- **Status Pencapaian Target TP:** {{TP_STATUS}}
+- **Rasio Jelajah Menuju Target (*Target Travel Ratio*):** {{TRAVEL_RATIO}}%
+  > *Rasio ini mengukur seberapa jauh harga telah melaju ke arah TP sejak berbalik di titik terdekat dengan Entry. Semakin mendekati 100%, semakin besar potensi setup telah ter-front-run.*
+- **Status Stop Loss:** {{SL_STATUS}}
+- **Jarak Harga Terkini ke Entry:** {{CURRENT_DIST_TO_ENTRY}} ({{CURRENT_DIST_TO_ENTRY_ATR}}×ATR)
+- **Jarak Harga Terkini ke TP:** {{CURRENT_DIST_TO_TP}} ({{CURRENT_DIST_TO_TP_ATR}}×ATR)
+- **Indikasi Mekanis Sistem:** `{{STATUS_HINT}}`
+
+---
+
+### 2. Data Candle Mentah Sequence Perjalanan Harga ({{INTERVAL_LABEL}}, UTC)
+Format kolom: `datetime(UTC),open,high,low,close,volume`
+```csv
+{{CANDLE_TABLE_CSV}}
+```
+
+---
+
+## Kerangka Evaluasi Integritas Setup (Wajib Diisi oleh LLM)
+
+Beri label pada setiap poin analisis: **[FAKTA]** (dari angka di atas), **[INFERENSI]** (pola struktural SMC/ICT), atau **[SPEKULASI]** (asumsi skenario).
+
+### A. Analisis Front-Run & Mitigasi POI
+1. **Apakah harga memantul sebelum menjemput level Entry?** Periksa selisih harga pada *Closest Approach* ({{CLOSEST_PRICE}} vs {{ENTRY_PRICE}}). Apakah selisih tersebut berada dalam batas toleransi *spread* wajar atau murni berbalik sebelum zona POI?
+2. **Evaluasi Target Travel:** Dengan pergerakan yang sudah menempuh {{TRAVEL_RATIO}}% ke arah TP, apakah "daging" pergerakan (*displacement move*) sudah selesai?
+3. **Risiko Retracement Ulang:** Jika harga saat ini kembali turun/naik mendekati level entry, apakah itu merupakan retest sehat atau justru tanda pelemahan struktur (*exhaustion / liquidity dump*)?
+
+### B. Evaluasi Draw on Liquidity (DOL)
+1. Apakah target TP ({{TP_PRICE}}) atau *liquidity pool* utama sudah tersapu (*swept*) sebelum entry kita disentuh?
+2. Jika DOL sudah tersapu, apakah masih ada alasan institusional yang sah untuk mempertahankan pending order di level {{ENTRY_PRICE}}?
+
+### C. Keputusan & Rekomendasi Akhir
+
+Pilih salah satu dari 4 status baku di bawah:
+
+| Status Akhir | Kriteria SMC/ICT |
+|---|---|
+| **`[STATUS: FRESH & VALID]`** | Harga belum menjemput entry, belum menempuh >50% perjalanan ke TP, DOL belum tersapu. Limit order aman dipertahankan. |
+| **`[STATUS: FRONT-RUNNED]`** | Harga berbalik sebelum entry (ada gap sisa) dan telah menempuh sebagian besar jarak ke TP (>50-70%). Batalkan pending order; jangan kejar harga! |
+| **`[STATUS: DOL REACHED / INVALIDATED]`** | Target TP atau liquidity pool utama sudah tersapu duluan sebelum entry tersentuh, atau SL tertembus. Setup batal. |
+| **`[STATUS: TRIGGERED / IN PLAY]`** | Level entry sudah ter-tap/terjemput dan posisi sedang aktif berjalan. |
+
+Isi kesimpulan terstruktur berikut:
+
+- **Verdict:** [Pilih salah satu status di atas]
+- **Confidence Level:** Low / Medium / High
+- **Alasan Kunci:** [Ringkasan 2-3 kalimat justifikasi berbasis fakta di atas]
+- **Tindakan yang Disarankan (Actionable Next Step):**
+  - [ ] **Pertahankan Limit Order**
+  - [ ] **Batalkan Limit Order (Cancel Order)**
+  - [ ] **Tunggu Konfirmasi Re-entry Baru (CHoCH / MSS)**

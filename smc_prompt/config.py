@@ -316,6 +316,27 @@ def validate_review_candles(count: int) -> int:
         )
     return count
 
+
+#: Setup validator mode defaults & bounds.
+DEFAULT_VALIDATE_CANDLES: int = 50
+DEFAULT_VALIDATE_INTERVAL: str = "15m"
+MIN_VALIDATE_CANDLES: int = 5
+MAX_VALIDATE_CANDLES: int = 500
+
+
+def validate_validate_candles(count: int) -> int:
+    """Validate setup validation candle count (must be between MIN_VALIDATE_CANDLES and MAX_VALIDATE_CANDLES)."""
+
+    if count < MIN_VALIDATE_CANDLES:
+        raise ConfigError(
+            f"--validate-candles must be >= {MIN_VALIDATE_CANDLES} (got {count})."
+        )
+    if count > MAX_VALIDATE_CANDLES:
+        raise ConfigError(
+            f"--validate-candles must be <= {MAX_VALIDATE_CANDLES} (got {count})."
+        )
+    return count
+
 #: Valid values for ``--distance-reference``.
 DISTANCE_REFERENCE_NEAREST: str = "nearest"
 DISTANCE_REFERENCE_MOST_RECENT: str = "most-recent"

@@ -233,6 +233,13 @@ dan [`smc_prompt/config.py`](smc_prompt/config.py).
 | `--candles-only` (atau `--review`) | flag | off | **Mode Post-Trade Review.** Hanya mengekspor data candle mentah (OHLCV) dan ringkasan pergerakan harga sesi ke berkas `.md` tanpa menyertakan template prompt analisis SMC pre-trade. |
 | `--review-interval` | interval Binance | `1h` | Interval candle untuk mode review (misal `15m`, `1h`, `4h`). |
 | `--review-candles` | `int` (5–500) | `30` | Jumlah candle closed yang diekspor pada mode review. |
+| `--validate-setup` (atau `--check-setup`) | flag | off | **Validasi Setup & Deteksi Front-Run.** Menghasilkan prompt terfokus untuk mengevaluasi apakah limit order/setup yang direncanakan masih valid, sudah ter-front-run, tersapu targetnya, atau sudah terjemput. |
+| `--entry` | `float` | — | Level harga entry yang direncanakan (wajib untuk `--validate-setup`). |
+| `--tp` | `float` | — | Level harga Take Profit / target DOL yang direncanakan (wajib untuk `--validate-setup`). |
+| `--sl` | `float` | `None` | Level harga Stop Loss yang direncanakan (opsional untuk `--validate-setup`). |
+| `--direction` | pilihan: `long` \| `short` | otomatis | Arah posisi (`long`/`short`). Bila tidak diisi, otomatis disimpulkan dari perbandingan `entry` dan `tp`. |
+| `--validate-interval` | interval Binance | `15m` | Interval candle LTF untuk melacak riwayat pendekatan harga (misal `15m`, `5m`, `1h`). |
+| `--validate-candles` | `int` (5–500) | `50` | Jumlah candle closed yang dianalisis pada mode validasi setup. |
 | `--env-file` | `path` (file) | `.env` | **Kredensial (Phase 6).** Berkas `.env` tempat kredensial provider dibaca. Tidak pernah menimpa variabel yang sudah ada di shell (prioritas: flag > environment > `.env`). Lihat "Kredensial via `.env`". |
 | `--no-dotenv` | flag | off | **Kredensial (Phase 6).** Lewati pemuatan `.env` sepenuhnya. Berguna untuk CI dan debugging agar berkas lokal tidak diam-diam mengubah hasil run. |
 | `--debug` | flag | off | Cetak stack trace saat error. |
@@ -549,6 +556,32 @@ Berkas ditulis ke `<output_dir>/<SYMBOL>-REVIEW-<TIMESTAMP>.md` dan disalin ke c
 - Ringkasan statistik harga (Open pertama, Close terakhir, Net change %, Highest high, Lowest low, Total range).
 - Formulir checklist jurnal trading (Arah Posisi, Entry, SL, TP, Outcome, Evaluasi).
 - Tabel CSV candle mentah siap pakai.
+
+#### 13e. Mode Validasi Setup & Deteksi Front-Run (--validate-setup)
+
+Digunakan saat Anda telah memiliki rencana setup (misal limit order di Order Block atau FVG), tetapi ingin mengecek apakah harga sudah sempat mendekati entry lalu berbalik dan melaju ke arah target (*front-runned*), atau bahkan target TP/DOL sudah tercapai duluan sebelum entry terisi (*invalidated*).
+
+```bash
+# Validasi Long Setup (arah posisi otomatis disimpulkan long karena TP > Entry)
+smc-prompt BTCUSDT --validate-setup --entry 60000 --tp 62500 --sl 59000
+
+# Validasi Short Setup dengan kustomisasi interval dan jumlah candle
+smc-prompt ETHUSDT --validate-setup --entry 2500 --tp 2300 --sl 2580 --validate-interval 15m --validate-candles 60
+
+# Alias --check-setup juga didukung
+smc-prompt SOLUSDT --check-setup --entry 140 --tp 155
+```
+
+Berkas ditulis ke `<output_dir>/<SYMBOL>-VALIDATION-<TIMESTAMP>.md` dan disalin ke clipboard. Prompt ini memuat:
+- **Fakta Kuantitatif:** Titik pendekatan terdekat (*closest approach*), selisih jarak ke entry (dalam harga dan normalisasi ATR), status mitigasi entry, status DOL, serta **Rasio Jelajah Target (*Target Travel Ratio*)**.
+- **Indikasi Status Mekanis:**
+  - `FRESH`: Harga belum terisi dan belum menempuh >=60% ke target TP. Setup masih segar.
+  - `FRONT_RUNNED`: Harga berbalik arah sebelum menyentuh entry dan telah menempuh >=60% menuju target TP. Risiko *chasing* tinggi.
+  - `DOL_REACHED`: Target TP/DOL telah tersapu sebelum level entry terjemput. Setup gugur (*invalidated*).
+  - `TRIGGERED`: Level entry sudah tersentuh/terlewati (posisi sudah aktif).
+  - `STOPPED_OUT`: Level SL sudah tertembus.
+- **Tabel OHLCV CSV Mentah:** Riwayat pergerakan candle selama sequence pendekatan harga.
+- **Panduan Evaluasi Risiko LLM:** Format instruksi terstruktur bagi model AI untuk menilai toleransi spread, pelemahan struktur retracement, dan keputusan limit order (Pertahankan / Batalkan / Tunggu Re-entry).
 
 #### 14. Contoh kegagalan yang umum (beserta exit code)
 

@@ -31,6 +31,11 @@ from .oanda_source import OandaSource
 from .output import deliver
 from .provider_base import price_sanity_warning
 from .review_renderer import render_review_markdown
+from .setup_validator import (
+    SetupSpec,
+    analyze_setup,
+    render_validation_prompt,
+)
 from .twelvedata_source import TwelveDataSource
 from .structure_analyzer import (
     analyze,
@@ -219,6 +224,13 @@ def _print_resolved_settings(
     candles_only: bool = False,
     review_interval: str = cfg.DEFAULT_REVIEW_INTERVAL,
     review_candles: int = cfg.DEFAULT_REVIEW_CANDLES,
+    validate_setup: bool = False,
+    entry: float | None = None,
+    tp: float | None = None,
+    sl: float | None = None,
+    direction: str | None = None,
+    validate_interval: str = cfg.DEFAULT_VALIDATE_INTERVAL,
+    validate_candles: int = cfg.DEFAULT_VALIDATE_CANDLES,
 ) -> None:
     """Print the resolved run settings for ``--dry-run`` (Phase 5, #16).
 
@@ -245,6 +257,21 @@ def _print_resolved_settings(
             f"[{PROG}] data source={source}",
             f"[{PROG}] review_interval={review_interval} ({cfg.interval_label(review_interval)})",
             f"[{PROG}] review_candles={review_candles}",
+            f"[{PROG}] output_dir={config.output_dir} stdout={print_stdout}",
+        ]
+        for line in lines:
+            click.echo(line, err=True)
+        return
+
+    if validate_setup:
+        lines = [
+            f"[{PROG}] DRY RUN — setup validation mode, no file written, no klines fetched.",
+            f"[{PROG}] symbol={config.symbol}",
+            f"[{PROG}] provider={config.provider}",
+            f"[{PROG}] data source={source}",
+            f"[{PROG}] direction={direction} entry={entry} tp={tp} sl={sl}",
+            f"[{PROG}] validate_interval={validate_interval} ({cfg.interval_label(validate_interval)})",
+            f"[{PROG}] validate_candles={validate_candles}",
             f"[{PROG}] output_dir={config.output_dir} stdout={print_stdout}",
         ]
         for line in lines:
@@ -336,8 +363,18 @@ def run(
     candles_only: bool = False,
     review_interval: str = cfg.DEFAULT_REVIEW_INTERVAL,
     review_candles: int = cfg.DEFAULT_REVIEW_CANDLES,
+    validate_setup: bool = False,
+    entry: float | None = None,
+    tp: float | None = None,
+    sl: float | None = None,
+    direction: str | None = None,
+    validate_interval: str = cfg.DEFAULT_VALIDATE_INTERVAL,
+    validate_candles: int = cfg.DEFAULT_VALIDATE_CANDLES,
 ) -> RunResult:
     """Chain fetch -> analyze -> render -> output. Raises on any failure."""
+
+    if candles_only and validate_setup:
+        raise ConfigError("Cannot specify both --candles-only and --validate-setup.")
 
     if candles_only:
         cfg.validate_interval(review_interval, flag="--review-interval")
@@ -345,6 +382,42 @@ def run(
         cfg.validate_review_candles(review_candles)
         if review_interval not in (htf_interval, mtf_interval, ltf_interval):
             ltf_interval = review_interval
+            if ltf_interval == mtf_interval:
+                mtf_interval = "4h" if ltf_interval != "4h" else "2h"
+            if ltf_interval == htf_interval:
+                htf_interval = "1d" if ltf_interval != "1d" else "1w"
+
+    inferred_direction: str | None = None
+    if validate_setup:
+        if entry is None or tp is None:
+            raise ConfigError("--validate-setup requires both --entry and --tp.")
+
+        dec_entry = Decimal(str(entry))
+        dec_tp = Decimal(str(tp))
+
+        if dec_tp == dec_entry:
+            raise ConfigError("--tp cannot be equal to --entry.")
+
+        if direction is not None:
+            dir_clean = direction.lower().strip()
+            if dir_clean not in ("long", "short"):
+                raise ConfigError(f"Invalid direction '{direction}'; must be 'long' or 'short'.")
+            inferred_direction = dir_clean
+        else:
+            inferred_direction = "long" if dec_tp > dec_entry else "short"
+
+        if sl is not None:
+            dec_sl = Decimal(str(sl))
+            if inferred_direction == "long" and dec_sl >= dec_entry:
+                raise ConfigError("For long setups, --sl must be lower than --entry.")
+            if inferred_direction == "short" and dec_sl <= dec_entry:
+                raise ConfigError("For short setups, --sl must be higher than --entry.")
+
+        cfg.validate_interval(validate_interval, flag="--validate-interval")
+        cfg.provider_interval(provider, validate_interval)
+        cfg.validate_validate_candles(validate_candles)
+        if validate_interval not in (htf_interval, mtf_interval, ltf_interval):
+            ltf_interval = validate_interval
             if ltf_interval == mtf_interval:
                 mtf_interval = "4h" if ltf_interval != "4h" else "2h"
             if ltf_interval == htf_interval:
@@ -395,6 +468,13 @@ def run(
             candles_only=candles_only,
             review_interval=review_interval,
             review_candles=review_candles,
+            validate_setup=validate_setup,
+            entry=entry,
+            tp=tp,
+            sl=sl,
+            direction=inferred_direction,
+            validate_interval=validate_interval,
+            validate_candles=validate_candles,
         )
         return RunResult("", "", False, False, (), dry_run=True)
 
@@ -519,6 +599,84 @@ def run(
 
         return RunResult(
             review_text,
+            output_path,
+            result.copied_to_clipboard,
+            print_stdout,
+            tuple(warnings),
+        )
+
+    # Setup validation fast-path
+    if validate_setup:
+        for message in warnings:
+            _warn(message)
+
+        fetch_limit = min(validate_candles + 20, cfg.FETCH_LIMIT_MAX)
+        raw_candles = fetcher.fetch_klines(validate_interval, fetch_limit)
+        closed_candles = [c for c in raw_candles if c.is_closed]
+
+        if len(closed_candles) < validate_candles:
+            warn_msg = (
+                f"Only {len(closed_candles)} closed {validate_interval} candles "
+                f"available (requested {validate_candles}). "
+                f"Reduced table to {len(closed_candles)}."
+            )
+            warnings.append(warn_msg)
+            _warn(warn_msg)
+
+        selected_candles = (
+            closed_candles[-validate_candles:]
+            if len(closed_candles) >= validate_candles
+            else closed_candles
+        )
+        if not selected_candles:
+            raise ConfigError(
+                f"No closed candles available for {config.symbol} at {validate_interval}."
+            )
+
+        assert inferred_direction is not None
+        assert entry is not None
+        assert tp is not None
+
+        setup_spec = SetupSpec(
+            symbol=config.symbol,
+            direction=inferred_direction,
+            entry_price=Decimal(str(entry)),
+            tp_price=Decimal(str(tp)),
+            sl_price=Decimal(str(sl)) if sl is not None else None,
+        )
+
+        analysis = analyze_setup(setup_spec, selected_candles)
+        generated_at = server_time or datetime.now(timezone.utc)
+
+        validation_text = render_validation_prompt(
+            setup=setup_spec,
+            analysis=analysis,
+            candles=selected_candles,
+            interval=validate_interval,
+            provider_label=config.provider_label,
+            generated_at=generated_at,
+            price_format=config.price_format,
+        )
+
+        if print_stdout:
+            click.echo(validation_text, nl=False)
+
+        result = deliver(
+            validation_text,
+            symbol=config.symbol,
+            output_dir=config.output_dir,
+            moment=generated_at,
+            is_validation=True,
+        )
+        output_path = str(result.output_path)
+        click.echo(f"[{PROG}] Setup validation prompt written to {output_path}.", err=True)
+        if result.clipboard_warning:
+            _warn(result.clipboard_warning)
+        else:
+            click.echo(f"[{PROG}] Setup validation prompt copied to clipboard.", err=True)
+
+        return RunResult(
+            validation_text,
             output_path,
             result.copied_to_clipboard,
             print_stdout,
@@ -906,6 +1064,58 @@ def run(
     help="Number of closed candles to export in --candles-only review mode (>= 5).",
 )
 @click.option(
+    "--validate-setup",
+    "--check-setup",
+    "validate_setup",
+    is_flag=True,
+    default=False,
+    help=(
+        "Generate a validation prompt to check if a setup is front-runned, "
+        "invalidated, triggered, or still fresh before entry."
+    ),
+)
+@click.option(
+    "--entry",
+    type=float,
+    default=None,
+    help="Planned entry price level for --validate-setup.",
+)
+@click.option(
+    "--tp",
+    type=float,
+    default=None,
+    help="Planned take profit / DOL target price level for --validate-setup.",
+)
+@click.option(
+    "--sl",
+    type=float,
+    default=None,
+    help="Planned stop loss price level for --validate-setup (optional).",
+)
+@click.option(
+    "--direction",
+    type=click.Choice(["long", "short"], case_sensitive=False),
+    default=None,
+    help=(
+        "Planned trade direction (long or short). If omitted, automatically "
+        "inferred from entry and tp."
+    ),
+)
+@click.option(
+    "--validate-interval",
+    type=str,
+    default=cfg.DEFAULT_VALIDATE_INTERVAL,
+    show_default=True,
+    help="Candle interval for --validate-setup (e.g. 15m, 1h, 5m).",
+)
+@click.option(
+    "--validate-candles",
+    type=int,
+    default=cfg.DEFAULT_VALIDATE_CANDLES,
+    show_default=True,
+    help="Number of closed candles to analyze for --validate-setup (5..500).",
+)
+@click.option(
     "--env-file",
     "env_file",
     type=click.Path(dir_okay=False),
@@ -956,6 +1166,13 @@ def main(
     candles_only: bool,
     review_interval: str,
     review_candles: int,
+    validate_setup: bool,
+    entry: float | None,
+    tp: float | None,
+    sl: float | None,
+    direction: str | None,
+    validate_interval: str,
+    validate_candles: int,
     env_file: str | None,
     no_dotenv: bool,
     debug: bool,
@@ -1005,6 +1222,13 @@ def main(
             candles_only=candles_only,
             review_interval=review_interval,
             review_candles=review_candles,
+            validate_setup=validate_setup,
+            entry=entry,
+            tp=tp,
+            sl=sl,
+            direction=direction,
+            validate_interval=validate_interval,
+            validate_candles=validate_candles,
         )
     except SmcPromptError as exc:
         _error(str(exc))

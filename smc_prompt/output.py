@@ -45,17 +45,24 @@ def make_output_path(
     moment: datetime,
     *,
     is_review: bool = False,
+    is_validation: bool = False,
 ) -> Path:
-    """``<output_dir>/<SYMBOL>-[REVIEW-]<YYYY-MM-DD-HH-MM-SS-UTC>.md``.
+    """``<output_dir>/<SYMBOL>-[REVIEW-|VALIDATION-]<YYYY-MM-DD-HH-MM-SS-UTC>.md``.
 
     The stamp is always normalized to UTC and uses hyphen separators (no
     colons), so the filename is filesystem-safe on Windows and POSIX. Example:
     ``EURUSD-2026-09-14-06-06-32-UTC.md`` or
-    ``EURUSD-REVIEW-2026-09-14-06-06-32-UTC.md``.
+    ``EURUSD-REVIEW-2026-09-14-06-06-32-UTC.md`` or
+    ``EURUSD-VALIDATION-2026-09-14-06-06-32-UTC.md``.
     """
 
     stamp = cfg.fmt_output_stamp_hyphen(moment)
-    prefix = f"{symbol.upper()}-REVIEW" if is_review else symbol.upper()
+    if is_validation:
+        prefix = f"{symbol.upper()}-VALIDATION"
+    elif is_review:
+        prefix = f"{symbol.upper()}-REVIEW"
+    else:
+        prefix = symbol.upper()
     return Path(output_dir) / f"{prefix}-{stamp}.md"
 
 
@@ -95,6 +102,7 @@ def deliver(
     output_dir: str = cfg.DEFAULT_OUTPUT_DIR,
     moment: datetime | None = None,
     is_review: bool = False,
+    is_validation: bool = False,
 ) -> DeliveryResult:
     """Write the text to a ``.md`` file, then best-effort copy to clipboard."""
 
@@ -103,6 +111,7 @@ def deliver(
         output_dir,
         moment or datetime.now(timezone.utc),
         is_review=is_review,
+        is_validation=is_validation,
     )
     write_output_file(path, text)
 
@@ -113,4 +122,5 @@ def deliver(
         clipboard_error = str(exc)
 
     return DeliveryResult(path, clipboard_error is None, clipboard_error)
+
 
