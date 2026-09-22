@@ -18,9 +18,9 @@ from .errors import ConfigError
 # Intervals / endpoint paths (no API key, read-only public market data only)
 # --------------------------------------------------------------------------
 
-HTF_INTERVAL: str = "1d"
-MTF_INTERVAL: str = "4h"
-LTF_INTERVAL: str = "1h"
+HTF_INTERVAL: str = "4h"
+MTF_INTERVAL: str = "1h"
+LTF_INTERVAL: str = "15m"
 
 #: Every kline interval Binance Futures accepts, in ascending-duration order. Used
 #: to validate ``--htf-interval`` / ``--mtf-interval`` / ``--ltf-interval``.
