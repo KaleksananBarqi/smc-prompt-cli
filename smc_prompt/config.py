@@ -22,7 +22,7 @@ HTF_INTERVAL: str = "1d"
 MTF_INTERVAL: str = "4h"
 LTF_INTERVAL: str = "1h"
 
-#: Every kline interval Binance Spot accepts, in ascending-duration order. Used
+#: Every kline interval Binance Futures accepts, in ascending-duration order. Used
 #: to validate ``--htf-interval`` / ``--mtf-interval`` / ``--ltf-interval``.
 BINANCE_INTERVALS: tuple[str, ...] = (
     "1m",
@@ -84,13 +84,13 @@ def interval_label(interval: str) -> str:
 
     return INTERVAL_LABELS.get(interval, interval)
 
-KLINES_PATH: str = "/api/v3/klines"
-TICKER_PRICE_PATH: str = "/api/v3/ticker/price"
-EXCHANGE_INFO_PATH: str = "/api/v3/exchangeInfo"
-#: Binance server time (``GET /api/v3/time``). Preferring the exchange clock
+KLINES_PATH: str = "/fapi/v1/klines"
+TICKER_PRICE_PATH: str = "/fapi/v1/ticker/price"
+EXCHANGE_INFO_PATH: str = "/fapi/v1/exchangeInfo"
+#: Binance server time (``GET /fapi/v1/time``). Preferring the exchange clock
 #: over the host clock keeps ``is_closed`` and ``GENERATED_AT_UTC`` immune to a
 #: skewed local clock. See ``data_fetcher.fetch_server_time``.
-TIME_PATH: str = "/api/v3/time"
+TIME_PATH: str = "/fapi/v1/time"
 
 # --------------------------------------------------------------------------
 # Base URL fallback list (orchestrator decision, see brief §3 notes)
@@ -99,8 +99,7 @@ TIME_PATH: str = "/api/v3/time"
 #: Approved public hosts, tried in order. Fail over on connection errors,
 #: HTTP 451 (geo-block) and HTTP 403. Overridable constant.
 DEFAULT_BASE_URLS: tuple[str, ...] = (
-    "https://api.binance.com",
-    "https://data-api.binance.vision",
+    "https://fapi.binance.com",
 )
 
 # --------------------------------------------------------------------------

@@ -37,7 +37,7 @@ class ConfigError(SmcPromptError):
 
 
 class SymbolNotFoundError(SmcPromptError):
-    """Symbol is not listed on Binance Spot (exit 3)."""
+    """Symbol is not listed on Binance Futures (exit 3)."""
 
     exit_code = 3
 

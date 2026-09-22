@@ -70,7 +70,7 @@ tinggal menjalankan satu perintah lalu menempelkan hasilnya ke LLM mana pun.
   "bias".
 - **Retry + backoff** dan **failover host** (connection error, HTTP 451
   geo-block, HTTP 403).
-- **Waktu server Binance** (`GET /api/v3/time`) sebagai acuan `now` untuk
+- **Waktu server Binance** (`GET /fapi/v1/time`) sebagai acuan `now` untuk
   keputusan candle closed dan `GENERATED_AT_UTC`, sehingga jam host yang miring
   tidak bisa menyuntikkan candle setengah-terbentuk. Bila endpoint gagal, jatuh
   ke jam host dengan peringatan.
@@ -263,8 +263,7 @@ Kedua mode terimplementasi penuh; default adalah `nearest`.
 CLI mencoba host secara berurutan dan berpindah (failover) saat connection
 error, HTTP 451 (geo-block), dan HTTP 403:
 
-1. `https://api.binance.com`
-2. `https://data-api.binance.vision`
+1. `https://fapi.binance.com`
 
 Memberikan `--base-url` akan menempatkan host tersebut di urutan pertama,
 diikuti host fallback yang tersisa (host yang sama tidak diduplikasi). Daftar
@@ -864,12 +863,12 @@ Konstanta penting (`smc_prompt/config.py`):
 |---|---|---|
 | `HTF_INTERVAL` | `1d` | Default `--htf-interval` (interval kline Binance untuk HTF). |
 | `LTF_INTERVAL` | `1h` | Default `--ltf-interval` (interval kline Binance untuk LTF). |
-| `TIME_PATH` | `/api/v3/time` | Endpoint waktu server Binance untuk keputusan candle closed dan `GENERATED_AT_UTC`. |
-| `EXCHANGE_INFO_PATH` | `/api/v3/exchangeInfo` | Sumber `PRICE_FILTER.tickSize` (presisi harga) dan `status` simbol. |
+| `TIME_PATH` | `/fapi/v1/time` | Endpoint waktu server Binance Futures untuk keputusan candle closed dan `GENERATED_AT_UTC`. |
+| `EXCHANGE_INFO_PATH` | `/fapi/v1/exchangeInfo` | Sumber `PRICE_FILTER.tickSize` (presisi harga) dan `status` simbol. |
 | `MAX_PRICE_DECIMALS` | `8` | Batas atas desimal harga dari tickSize. |
 | `BINANCE_INTERVALS` | `(1m,3m,5m,15m,30m,1h,2h,4h,6h,8h,12h,1d,3d,1w,1M)` | Himpunan interval kline Binance yang valid (dipakai untuk validasi `--htf-interval`/`--ltf-interval`). |
 | `INTERVAL_LABELS` | `{1d: Daily, 1h: 1H, 4h: 4H, ...}` | Pemetaan interval → label yang dirender pada judul prosa prompt. |
-| `DEFAULT_BASE_URLS` | `(https://api.binance.com, https://data-api.binance.vision)` | Daftar host fallback yang dapat di-override. |
+| `DEFAULT_BASE_URLS` | `(https://fapi.binance.com,)` | Daftar host fallback yang dapat di-override. |
 | `DEFAULT_HTF_CANDLES` | `60` | Default `--htf-candles`. |
 | `DEFAULT_LTF_CANDLES` | `100` | Default `--ltf-candles`. |
 | `DEFAULT_SWING_LOOKBACK` | `5` | Default `--swing-lookback`. |
@@ -1102,7 +1101,7 @@ Setelah render, ukuran prompt dihitung dalam **byte UTF-8**:
   Bila tick tidak tersedia/tidak dapat diparse, fallback ke aturan berbasis
   magnitudo: `>= 1000` → 2 desimal, `>= 1` → 4 desimal, `< 1` → 8 desimal.
   Kedua jalur deterministik; untuk sampel BTCUSDT beku keduanya identik.
-- **Waktu closure memakai jam server Binance** (`GET /api/v3/time`), bukan jam
+- **Waktu closure memakai jam server Binance** (`GET /fapi/v1/time`), bukan jam
   host, sehingga jam host yang miring tidak mengklasifikasi candle terakhir
   secara keliru. Bila server time tidak tersedia, jam host dipakai dengan
   peringatan `[smc-prompt] WARN:` dan exit code tetap `0`.

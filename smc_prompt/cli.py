@@ -513,7 +513,7 @@ def run(
     #   * offline CSV      — enabled ONLY by --input-csv (network-free)
     #   * Binance          — the default network provider (crypto)
     #   * Twelve Data / OANDA — network providers that can serve XAUUSD, which
-    #     Binance Spot cannot (no fiat/forex/metal instruments)
+    #     Binance Futures cannot (no fiat/forex/metal instruments)
     fetcher: DataFetcher | LocalCsvSource | TwelveDataSource | OandaSource
     if offline_mode:
         fetcher = LocalCsvSource(
@@ -868,7 +868,7 @@ def run(
     help=(
         "Generate a mechanical SMC/ICT [FAKTA] prompt payload from read-only "
         "public market data (Binance / Twelve Data / OANDA). Useful for FX and "
-        "metals (e.g. XAUUSD) which Binance Spot does not list. No LLM calls, "
+        "metals (e.g. XAUUSD) which Binance Futures does not list. No LLM calls, "
         "no reasoning, no trading."
     ),
 )

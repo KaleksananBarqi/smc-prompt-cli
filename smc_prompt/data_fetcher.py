@@ -1,10 +1,10 @@
-"""Binance public REST client (read-only market data only).
+"""Binance Futures (USDT-M) public REST client (read-only market data only).
 
 Endpoints (no API key, no signed/private routes, spec §4.1):
-  * ``GET /api/v3/klines``        — HTF daily / LTF hourly OHLCV
-  * ``GET /api/v3/ticker/price``  — current price
-  * ``GET /api/v3/exchangeInfo``  — symbol validation (+ tickSize, status)
-  * ``GET /api/v3/time``          — server time (clock-skew-safe closure)
+  * ``GET /fapi/v1/klines``        — HTF daily / LTF hourly OHLCV
+  * ``GET /fapi/v1/ticker/price``  — current price
+  * ``GET /fapi/v1/exchangeInfo``  — symbol validation (+ tickSize, status)
+  * ``GET /fapi/v1/time``          — server time (clock-skew-safe closure)
 
 Includes retry-with-backoff (spec §9.4) and base-URL failover on connection
 errors / HTTP 451 / HTTP 403.
@@ -186,7 +186,7 @@ class DataFetcher:
                     # 400 commonly means "symbol does not exist" for klines.
                     raise SymbolNotFoundError(
                         f"Symbol '{self._config.symbol}' is not listed on "
-                        f"Binance Spot. Check the spelling (e.g. BTCUSDT)."
+                        f"Binance Futures. Check the spelling (e.g. BTCUSDT)."
                     )
 
                 if status in _RETRY_STATUSES:
@@ -228,7 +228,7 @@ class DataFetcher:
         return self._active_base_url
 
     def fetch_server_time(self) -> datetime:
-        """Fetch the Binance server time (``GET /api/v3/time``).
+        """Fetch the Binance server time (``GET /fapi/v1/time``).
 
         Using the exchange clock as the ``now`` reference keeps the half-open
         candle decision (and ``GENERATED_AT_UTC``) immune to a skewed host
@@ -260,9 +260,15 @@ class DataFetcher:
         if not symbols:
             raise SymbolNotFoundError(
                 f"Symbol '{self._config.symbol}' is not listed on Binance "
-                f"Spot. Check the spelling (e.g. BTCUSDT)."
+                f"Futures. Check the spelling (e.g. BTCUSDT)."
             )
-        return symbols[0]
+        matched = [s for s in symbols if s.get("symbol") == self._config.symbol]
+        if not matched:
+            raise SymbolNotFoundError(
+                f"Symbol '{self._config.symbol}' is not listed on Binance "
+                f"Futures. Check the spelling (e.g. BTCUSDT)."
+            )
+        return matched[0]
 
     def fetch_klines(
         self, interval: str, limit: int, *, symbol: str | None = None
