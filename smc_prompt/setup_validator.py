@@ -64,6 +64,8 @@ class FrontRunAnalysis:
     tp_status: str
     sl_status: str
     atr: Decimal | None
+    post_approach_extreme_price: Decimal | None = None
+    post_approach_time: datetime | None = None
 
     @property
     def status(self) -> str:
@@ -158,6 +160,9 @@ def analyze_setup(
         if len(closed_candles) >= cfg.DEFAULT_ATR_PERIOD + 1:
             atr = compute_atr(closed_candles, cfg.DEFAULT_ATR_PERIOD)
 
+    post_extreme_price: Decimal | None = None
+    post_extreme_time: datetime | None = None
+
     if order_status == "unfilled":
         # Fakta mutlak trader: order belum pernah tersentuh / belum terisi di exchange
         entry_touched = False
@@ -174,17 +179,26 @@ def analyze_setup(
             closest_price = closest_candle.low
             closest_time = closest_candle.open_time
 
-            highest_candle = max(candles, key=lambda c: c.high)
-            target_reached = highest_candle.high >= tp
+            # KRONOLOGI TEMPORAL:
+            # Pantulan harga dan rasio perjalanan ke target HANYA dihitung sejak
+            # titik pendekatan terdekat terjadi (c.open_time >= closest_time).
+            # Candle masa lalu sebelum closest_candle tidak boleh mencemari rasio front-run!
+            closest_idx = candles.index(closest_candle)
+            post_approach_candles = candles[closest_idx:]
+
+            highest_post_candle = max(post_approach_candles, key=lambda c: c.high)
+            post_extreme_price = highest_post_candle.high
+            post_extreme_time = highest_post_candle.open_time
+
+            target_reached = post_extreme_price >= tp
 
             total_target_span = tp - entry
-            peak = highest_candle.high
-            if peak <= entry:
+            if post_extreme_price <= entry:
                 travel_ratio = Decimal("0.0")
             else:
                 travel_ratio = min(
                     Decimal("100.0"),
-                    ((peak - entry) / total_target_span) * Decimal("100"),
+                    ((post_extreme_price - entry) / total_target_span) * Decimal("100"),
                 )
 
         else:  # short unfilled
@@ -197,26 +211,32 @@ def analyze_setup(
             closest_price = closest_candle.high
             closest_time = closest_candle.open_time
 
-            lowest_candle = min(candles, key=lambda c: c.low)
-            target_reached = lowest_candle.low <= tp
+            # KRONOLOGI TEMPORAL:
+            closest_idx = candles.index(closest_candle)
+            post_approach_candles = candles[closest_idx:]
+
+            lowest_post_candle = min(post_approach_candles, key=lambda c: c.low)
+            post_extreme_price = lowest_post_candle.low
+            post_extreme_time = lowest_post_candle.open_time
+
+            target_reached = post_extreme_price <= tp
 
             total_target_span = entry - tp
-            trough = lowest_candle.low
-            if trough >= entry:
+            if post_extreme_price >= entry:
                 travel_ratio = Decimal("0.0")
             else:
                 travel_ratio = min(
                     Decimal("100.0"),
-                    ((entry - trough) / total_target_span) * Decimal("100"),
+                    ((entry - post_extreme_price) / total_target_span) * Decimal("100"),
                 )
 
         # Status mekanis untuk unfilled order
         if target_reached:
-            status_hint = "DOL_REACHED (Target TP/DOL tersapu sebelum limit order terjemput - INVALID)"
+            status_hint = "DOL_REACHED (Target TP/DOL tersapu setelah memantul sebelum limit order terjemput - INVALID)"
         elif travel_ratio >= Decimal("60.0"):
-            status_hint = f"FRONT_RUNNED (Harga memantul di {fmt(closest_price)} tanpa menjemput Entry dan sudah menempuh {travel_ratio:.1f}% ke TP)"
+            status_hint = f"FRONT_RUNNED (Harga memantul di {fmt(closest_price)} tanpa menjemput Entry dan telah melaju {travel_ratio:.1f}% ke TP)"
         else:
-            status_hint = "FRESH (Limit order belum terjemput dan belum menempuh >=60% ke TP - FRESH & VALID)"
+            status_hint = f"FRESH (Limit order belum terjemput dan pantulan pasca-pendekatan baru {travel_ratio:.1f}% ke TP - FRESH & VALID)"
 
         closest_dist = abs(closest_price - entry)
         entry_status = f"BELUM TERJEMPUT (Limit Order masih aktif di exchange, selisih {fmt(closest_dist)} dari level entry)"
@@ -232,41 +252,60 @@ def analyze_setup(
         entry_touched = True
 
         if direction == "long":
-            closest_candle = min(candles, key=lambda c: c.low)
-            closest_price = closest_candle.low
-            closest_time = closest_candle.open_time
+            # Evaluasi SL dan TP sejak candle pertama posisi terisi (first fill candle)
+            fill_candidates = [c for c in candles if c.low <= entry <= c.high]
+            if fill_candidates:
+                fill_candle = fill_candidates[0]
+                fill_idx = candles.index(fill_candle)
+                active_candles = candles[fill_idx:]
+            else:
+                active_candles = candles
+
+            lowest_active_candle = min(active_candles, key=lambda c: c.low)
+            closest_price = lowest_active_candle.low
+            closest_time = lowest_active_candle.open_time
             sl_breached = (closest_price <= sl) if sl is not None else False
 
-            highest_candle = max(candles, key=lambda c: c.high)
-            target_reached = highest_candle.high >= tp
+            highest_active_candle = max(active_candles, key=lambda c: c.high)
+            post_extreme_price = highest_active_candle.high
+            post_extreme_time = highest_active_candle.open_time
+            target_reached = post_extreme_price >= tp
 
             total_target_span = tp - entry
-            peak = highest_candle.high
-            if peak <= entry:
+            if post_extreme_price <= entry:
                 travel_ratio = Decimal("0.0")
             else:
                 travel_ratio = min(
                     Decimal("100.0"),
-                    ((peak - entry) / total_target_span) * Decimal("100"),
+                    ((post_extreme_price - entry) / total_target_span) * Decimal("100"),
                 )
 
         else:  # short filled
-            closest_candle = max(candles, key=lambda c: c.high)
-            closest_price = closest_candle.high
-            closest_time = closest_candle.open_time
+            fill_candidates = [c for c in candles if c.low <= entry <= c.high]
+            if fill_candidates:
+                fill_candle = fill_candidates[0]
+                fill_idx = candles.index(fill_candle)
+                active_candles = candles[fill_idx:]
+            else:
+                active_candles = candles
+
+            highest_active_candle = max(active_candles, key=lambda c: c.high)
+            closest_price = highest_active_candle.high
+            closest_time = highest_active_candle.open_time
             sl_breached = (closest_price >= sl) if sl is not None else False
 
-            lowest_candle = min(candles, key=lambda c: c.low)
-            target_reached = lowest_candle.low <= tp
+            lowest_active_candle = min(active_candles, key=lambda c: c.low)
+            post_extreme_price = lowest_active_candle.low
+            post_extreme_time = lowest_active_candle.open_time
+            target_reached = post_extreme_price <= tp
 
             total_target_span = entry - tp
-            trough = lowest_candle.low
-            if trough >= entry:
+            if post_extreme_price >= entry:
                 travel_ratio = Decimal("0.0")
             else:
                 travel_ratio = min(
                     Decimal("100.0"),
-                    ((entry - trough) / total_target_span) * Decimal("100"),
+                    ((entry - post_extreme_price) / total_target_span) * Decimal("100"),
                 )
 
         closest_dist = abs(closest_price - entry)
@@ -330,6 +369,8 @@ def analyze_setup(
         tp_status=tp_status,
         sl_status=sl_status,
         atr=atr,
+        post_approach_extreme_price=post_extreme_price,
+        post_approach_time=post_extreme_time,
     )
 
 
@@ -403,6 +444,16 @@ def render_validation_prompt(
         "CLOSEST_TIME": _fmt_ts(analysis.closest_approach_time),
         "CLOSEST_DIST": fmt(analysis.closest_approach_distance),
         "CLOSEST_DIST_ATR": analysis.closest_approach_distance_atr,
+        "POST_APPROACH_EXTREME": (
+            fmt(analysis.post_approach_extreme_price)
+            if analysis.post_approach_extreme_price is not None
+            else "n/a"
+        ),
+        "POST_APPROACH_TIME": (
+            _fmt_ts(analysis.post_approach_time)
+            if analysis.post_approach_time is not None
+            else "n/a"
+        ),
         "ENTRY_STATUS": analysis.entry_status,
         "TP_STATUS": analysis.tp_status,
         "TRAVEL_RATIO": f"{analysis.target_travel_ratio:.1f}",

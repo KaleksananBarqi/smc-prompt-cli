@@ -245,6 +245,110 @@ def test_analyze_setup_pdf_scenario_unfilled_not_stopped_out() -> None:
     assert "BELUM AKTIF" in analysis.sl_status
 
 
+def test_analyze_setup_pdf_chronological_peak_before_pullback_is_fresh() -> None:
+    """Skenario PDF BTCUSDT: Puncak 87395.67 terjadi SEBELUM harga turun ke 85300.00.
+
+    Setup Long: Entry 84750, TP 88400, SL 83700, unfilled.
+    Candle 0 (21 Sept 20:15): High 87395.67 (puncak sebelum pullback).
+    Candle 1 (22 Sept 02:00): Low 85300.00 (closest approach).
+    Candle 2 (22 Sept 02:45): High 85879.25 (pantulan kecil pasca-approach).
+    Candle 3 (22 Sept 05:00): Close 85404.72 (harga terkini).
+
+    Sistem HARUS menghitung pantulan HANYA dari candle 1 s/d 3 (pantulan 85879.25 -> 30.9%).
+    Sistem TIDAK BOLEH mengambil 87395.67 dari candle 0 (yang menghasilkan 72.5% / FRONT_RUNNED).
+    Status akhir harus FRESH & VALID!
+    """
+    setup = SetupSpec(
+        symbol="BTCUSDT",
+        direction="long",
+        entry_price=Decimal("84750"),
+        tp_price=Decimal("88400"),
+        sl_price=Decimal("83700"),
+        order_status="unfilled",
+    )
+    candles = [
+        # Candle 0: masa lalu sebelum pullback (High 87395.67)
+        make_candle(0, open_="86750", high="87395.67", low="86707.58", close="87278.42"),
+        # Candle 1: titik pendekatan terdekat ke entry (Low 85300.00)
+        make_candle(1, open_="85616", high="85698.79", low="85300.00", close="85605.08"),
+        # Candle 2: pantulan tertinggi pasca-approach (High 85879.25)
+        make_candle(2, open_="85812", high="85879.25", low="85666.14", close="85714.90"),
+        # Candle 3: candle terkini saat evaluasi (Close 85404.72)
+        make_candle(3, open_="85452", high="85505.36", low="85374.00", close="85404.72"),
+    ]
+
+    analysis = analyze_setup(setup, candles)
+
+    assert not analysis.entry_touched
+    assert not analysis.sl_touched
+    # Closest price adalah 85300.00
+    assert analysis.closest_price == Decimal("85300.00")
+    # Ekstrem pantulan setelah closest approach adalah 85879.25 (bukan 87395.67!)
+    assert analysis.post_approach_extreme_price == Decimal("85879.25")
+    assert analysis.post_approach_time == candles[2].open_time
+
+    # Travel ratio = (85879.25 - 84750) / (88400 - 84750) * 100 = 1129.25 / 3650 = 30.9%
+    assert analysis.target_travel_ratio == Decimal("30.9")
+    # Karena 30.9% < 60.0%, statusnya WAJIB FRESH, bukan FRONT_RUNNED!
+    assert analysis.status == "FRESH"
+    assert "FRESH & VALID" in analysis.status_hint
+
+
+def test_analyze_setup_short_chronological_trough_before_pullback() -> None:
+    """Short setup temporal: harga dasar masa lalu tidak mencemari rasio pantulan."""
+    setup = SetupSpec(
+        symbol="ETHUSDT",
+        direction="short",
+        entry_price=Decimal("2500"),
+        tp_price=Decimal("2100"),
+        sl_price=Decimal("2600"),
+        order_status="unfilled",
+    )
+    candles = [
+        # Candle 0: masa lalu sebelum harga naik (Low 2150)
+        make_candle(0, open_="2200", high="2250", low="2150", close="2230"),
+        # Candle 1: harga naik mendekati entry short (High 2480 - closest approach)
+        make_candle(1, open_="2460", high="2480", low="2455", close="2470"),
+        # Candle 2: harga turun ke 2450 setelah mendekat (post-approach trough)
+        make_candle(2, open_="2470", high="2475", low="2450", close="2460"),
+    ]
+
+    analysis = analyze_setup(setup, candles)
+
+    assert analysis.closest_price == Decimal("2480")
+    assert analysis.post_approach_extreme_price == Decimal("2450")
+    # Travel ratio dihitung dari (2500 - 2450) / (2500 - 2100) = 50 / 400 = 12.5% (bukan dari 2150!)
+    assert analysis.target_travel_ratio == Decimal("12.5")
+    assert analysis.status == "FRESH"
+
+
+def test_analyze_setup_filled_order_temporal_no_pre_fill_stopped_out() -> None:
+    """Filled order temporal: candle masa lalu sebelum posisi terisi tidak memicu STOPPED_OUT."""
+    setup = SetupSpec(
+        symbol="BTCUSDT",
+        direction="long",
+        entry_price=Decimal("100"),
+        tp_price=Decimal("120"),
+        sl_price=Decimal("90"),
+        order_status="filled",
+    )
+    candles = [
+        # Candle 0: masa lalu sebelum setup dibuat, harga pernah ke 85 (di bawah SL 90)
+        make_candle(0, open_="88", high="95", low="85", close="92"),
+        # Candle 1: harga naik dan memicu entry di 100 (low 99.5)
+        make_candle(1, open_="98", high="102", low="99.5", close="101"),
+        # Candle 2: posisi berjalan sehat (low 98, high 110)
+        make_candle(2, open_="101", high="110", low="98", close="109"),
+    ]
+
+    analysis = analyze_setup(setup, candles)
+
+    # Karena evaluasi SL hanya sejak candle 1 (first fill), SL tidak breached!
+    assert not analysis.sl_breached
+    assert analysis.status == "TRIGGERED"
+    assert "IN_PLAY" in analysis.status_hint
+
+
 def test_render_validation_prompt() -> None:
     """Memverifikasi seluruh section dan komponen prompt validasi setup."""
     setup = SetupSpec(
