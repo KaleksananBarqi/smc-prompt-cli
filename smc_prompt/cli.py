@@ -229,6 +229,7 @@ def _print_resolved_settings(
     tp: float | None = None,
     sl: float | None = None,
     direction: str | None = None,
+    order_status: str | None = None,
     validate_interval: str = cfg.DEFAULT_VALIDATE_INTERVAL,
     validate_candles: int = cfg.DEFAULT_VALIDATE_CANDLES,
 ) -> None:
@@ -269,7 +270,7 @@ def _print_resolved_settings(
             f"[{PROG}] symbol={config.symbol}",
             f"[{PROG}] provider={config.provider}",
             f"[{PROG}] data source={source}",
-            f"[{PROG}] direction={direction} entry={entry} tp={tp} sl={sl}",
+            f"[{PROG}] direction={direction} order_status={order_status} entry={entry} tp={tp} sl={sl}",
             f"[{PROG}] validate_interval={validate_interval} ({cfg.interval_label(validate_interval)})",
             f"[{PROG}] validate_candles={validate_candles}",
             f"[{PROG}] output_dir={config.output_dir} stdout={print_stdout}",
@@ -368,6 +369,9 @@ def run(
     tp: float | None = None,
     sl: float | None = None,
     direction: str | None = None,
+    order_status: str | None = None,
+    unfilled: bool = False,
+    filled: bool = False,
     validate_interval: str = cfg.DEFAULT_VALIDATE_INTERVAL,
     validate_candles: int = cfg.DEFAULT_VALIDATE_CANDLES,
 ) -> RunResult:
@@ -388,7 +392,31 @@ def run(
                 htf_interval = "1d" if ltf_interval != "1d" else "1w"
 
     inferred_direction: str | None = None
+    resolved_order_status: str | None = None
     if validate_setup:
+        if unfilled and filled:
+            raise ConfigError("Cannot specify both --unfilled and --filled.")
+
+        if unfilled:
+            resolved_order_status = "unfilled"
+        elif filled:
+            resolved_order_status = "filled"
+        elif order_status is not None:
+            clean_status = order_status.lower().strip()
+            if clean_status in ("unfilled", "pending"):
+                resolved_order_status = "unfilled"
+            elif clean_status in ("filled", "triggered"):
+                resolved_order_status = "filled"
+            else:
+                raise ConfigError(
+                    f"Invalid order status '{order_status}'; must be 'unfilled' or 'filled'."
+                )
+        else:
+            raise ConfigError(
+                "--validate-setup requires specifying order status: use --status [unfilled|filled] "
+                "(or flag --unfilled / --filled)."
+            )
+
         if entry is None or tp is None:
             raise ConfigError("--validate-setup requires both --entry and --tp.")
 
@@ -473,6 +501,7 @@ def run(
             tp=tp,
             sl=sl,
             direction=inferred_direction,
+            order_status=resolved_order_status,
             validate_interval=validate_interval,
             validate_candles=validate_candles,
         )
@@ -634,6 +663,7 @@ def run(
             )
 
         assert inferred_direction is not None
+        assert resolved_order_status is not None
         assert entry is not None
         assert tp is not None
 
@@ -643,6 +673,7 @@ def run(
             entry_price=Decimal(str(entry)),
             tp_price=Decimal(str(tp)),
             sl_price=Decimal(str(sl)) if sl is not None else None,
+            order_status=resolved_order_status,
         )
 
         analysis = analyze_setup(setup_spec, selected_candles)
@@ -1102,6 +1133,31 @@ def run(
     ),
 )
 @click.option(
+    "--order-status",
+    "--status",
+    "order_status",
+    type=click.Choice(["unfilled", "filled", "pending", "triggered"], case_sensitive=False),
+    default=None,
+    help=(
+        "Execution status of your order at the exchange: 'unfilled' (limit order pending) "
+        "or 'filled' (position active). Required for --validate-setup."
+    ),
+)
+@click.option(
+    "--unfilled",
+    "unfilled",
+    is_flag=True,
+    default=False,
+    help="Shortcut for --order-status unfilled (limit order pending, belum terjemput).",
+)
+@click.option(
+    "--filled",
+    "filled",
+    is_flag=True,
+    default=False,
+    help="Shortcut for --order-status filled (position active, sudah terjemput).",
+)
+@click.option(
     "--validate-interval",
     type=str,
     default=cfg.DEFAULT_VALIDATE_INTERVAL,
@@ -1171,6 +1227,9 @@ def main(
     tp: float | None,
     sl: float | None,
     direction: str | None,
+    order_status: str | None,
+    unfilled: bool,
+    filled: bool,
     validate_interval: str,
     validate_candles: int,
     env_file: str | None,
@@ -1227,6 +1286,9 @@ def main(
             tp=tp,
             sl=sl,
             direction=direction,
+            order_status=order_status,
+            unfilled=unfilled,
+            filled=filled,
             validate_interval=validate_interval,
             validate_candles=validate_candles,
         )

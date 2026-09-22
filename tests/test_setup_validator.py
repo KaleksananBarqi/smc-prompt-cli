@@ -98,13 +98,14 @@ def test_analyze_setup_long_fresh() -> None:
 
 
 def test_analyze_setup_long_triggered() -> None:
-    """Long setup: entry tersentuh (low <= entry), setup aktif."""
+    """Long setup: posisi sudah terisi (filled), entry tersentuh (low <= entry), setup aktif."""
     setup = SetupSpec(
         symbol="BTCUSDT",
         direction="long",
         entry_price=Decimal("100"),
         tp_price=Decimal("120"),
         sl_price=Decimal("90"),
+        order_status="filled",
     )
     candles = [
         make_candle(0, open_="105", high="105", low="99.5", close="101"),
@@ -126,6 +127,7 @@ def test_analyze_setup_long_dol_reached() -> None:
         entry_price=Decimal("100"),
         tp_price=Decimal("120"),
         sl_price=Decimal("90"),
+        order_status="unfilled",
     )
     candles = [
         make_candle(0, open_="105", high="106", low="101", close="104"),
@@ -139,13 +141,14 @@ def test_analyze_setup_long_dol_reached() -> None:
 
 
 def test_analyze_setup_long_stopped_out() -> None:
-    """Long setup: entry tersentuh lalu harga jatuh menembus SL."""
+    """Long setup: posisi terisi (filled), harga menembus SL."""
     setup = SetupSpec(
         symbol="BTCUSDT",
         direction="long",
         entry_price=Decimal("100"),
         tp_price=Decimal("120"),
         sl_price=Decimal("90"),
+        order_status="filled",
     )
     candles = [
         make_candle(0, open_="105", high="105", low="99", close="99.5"),
@@ -166,6 +169,7 @@ def test_analyze_setup_short_front_runned() -> None:
         entry_price=Decimal("2000"),
         tp_price=Decimal("1800"),
         sl_price=Decimal("2100"),
+        order_status="unfilled",
     )
     # Candle 0: mendekati entry (high 1990, selisih 10.0)
     # Candle 1: jatuh ke 1850 (travel ratio = (2000-1850)/200 = 75%)
@@ -183,13 +187,14 @@ def test_analyze_setup_short_front_runned() -> None:
 
 
 def test_analyze_setup_short_stopped_out() -> None:
-    """Short setup: entry tersentuh lalu harga naik menembus SL."""
+    """Short setup: posisi terisi (filled), lalu harga naik menembus SL."""
     setup = SetupSpec(
         symbol="ETHUSDT",
         direction="short",
         entry_price=Decimal("2000"),
         tp_price=Decimal("1800"),
         sl_price=Decimal("2100"),
+        order_status="filled",
     )
     candles = [
         make_candle(0, open_="1980", high="2005", low="1970", close="1995"),
@@ -200,6 +205,44 @@ def test_analyze_setup_short_stopped_out() -> None:
     assert analysis.status == "STOPPED_OUT"
     assert analysis.entry_touched
     assert analysis.sl_touched
+
+
+def test_analyze_setup_pdf_scenario_unfilled_not_stopped_out() -> None:
+    """Skenario PDF user: Long BTC entry 83700, SL 81700, candle historis pernah 80850.
+
+    Trader menyatakan limit order BELUM TERJEMPUT (unfilled).
+    Sistem TIDAK BOLEH menganggap posisi STOPPED_OUT atau TERJEMPUT berdasarkan
+    candle historis masa lalu sebelum order dipasang.
+    Closest approach harus mengambil pantulan terdekat yang berada di atas entry (84778).
+    """
+    setup = SetupSpec(
+        symbol="BTCUSDT",
+        direction="long",
+        entry_price=Decimal("83700"),
+        tp_price=Decimal("88000"),
+        sl_price=Decimal("81700"),
+        order_status="unfilled",
+    )
+    candles = [
+        # Candle 0: masa lalu sebelum order (misal 01:45 UTC), low 80850
+        make_candle(0, open_="81200", high="81500", low="80850", close="81300"),
+        # Candle 1: harga naik lalu pullback menuju entry tapi hanya sampai 84778 lalu lari ke 87000
+        make_candle(1, open_="81300", high="85500", low="84778", close="85400"),
+        make_candle(2, open_="85400", high="87000", low="85200", close="86800"),
+    ]
+
+    analysis = analyze_setup(setup, candles)
+
+    # Validasi fakta bahwa order belum terisi
+    assert not analysis.entry_touched
+    assert not analysis.sl_touched
+    assert analysis.status != "STOPPED_OUT"
+    assert analysis.status == "FRONT_RUNNED"
+    # Closest approach harus 84778, bukan 80850
+    assert analysis.closest_price == Decimal("84778")
+    assert analysis.closest_approach_distance == Decimal("1078")  # 84778 - 83700
+    assert "BELUM TERJEMPUT" in analysis.entry_status
+    assert "BELUM AKTIF" in analysis.sl_status
 
 
 def test_render_validation_prompt() -> None:
@@ -249,18 +292,103 @@ def test_render_validation_prompt() -> None:
     assert "[STATUS: FRESH & VALID]" in prompt
 
 
+def test_render_validation_prompt_anti_hallucination_unfilled() -> None:
+    """Memverifikasi direktif anti-halusinasi muncul saat order_status unfilled."""
+    setup = SetupSpec(
+        symbol="BTCUSDT",
+        direction="long",
+        entry_price=Decimal("83700"),
+        tp_price=Decimal("88000"),
+        sl_price=Decimal("81700"),
+        order_status="unfilled",
+    )
+    candles = [
+        make_candle(0, open_="81200", high="81500", low="80850", close="81300"),
+        make_candle(1, open_="81300", high="85500", low="84778", close="85400"),
+    ]
+    analysis = analyze_setup(setup, candles)
+    prompt = render_validation_prompt(
+        setup=setup,
+        analysis=analysis,
+        candles=candles,
+        interval="15m",
+        provider_label="Binance",
+        generated_at=datetime(2026, 9, 21, 12, 0, 0, tzinfo=timezone.utc),
+        price_format=cfg.PriceFormat(2),
+    )
+
+    assert "- **Status Order Trader:** BELUM TERJEMPUT (LIMIT ORDER MASIH PENDING DI EXCHANGE)" in prompt
+    assert "DILARANG KERAS" in prompt
+    assert "berhalusinasi atau berasumsi bahwa posisi ini sudah aktif" in prompt
+    assert "LIMIT ORDER MASIH PENDING DI EXCHANGE DAN BELUM PERNAH TERISI / BELUM TERJEMPUT" in prompt
+
+
+def test_render_validation_prompt_filled_directives() -> None:
+    """Memverifikasi petunjuk manajemen posisi muncul saat order_status filled."""
+    setup = SetupSpec(
+        symbol="BTCUSDT",
+        direction="long",
+        entry_price=Decimal("83700"),
+        tp_price=Decimal("88000"),
+        sl_price=Decimal("81700"),
+        order_status="filled",
+    )
+    candles = [
+        make_candle(0, open_="84000", high="84500", low="83500", close="83900"),
+    ]
+    analysis = analyze_setup(setup, candles)
+    prompt = render_validation_prompt(
+        setup=setup,
+        analysis=analysis,
+        candles=candles,
+        interval="15m",
+        provider_label="Binance",
+        generated_at=datetime(2026, 9, 21, 12, 0, 0, tzinfo=timezone.utc),
+        price_format=cfg.PriceFormat(2),
+    )
+
+    assert "- **Status Order Trader:** SUDAH TERJEMPUT (POSISI TRADING AKTIF BERJALAN)" in prompt
+    assert "SUDAH TERJEMPUT (AKTIF BERJALAN DI PASAR)" in prompt
+    assert "Trade Management" in prompt
+
+
 def test_cli_validate_setup_validations() -> None:
     """Memverifikasi validasi input CLI untuk --validate-setup."""
+    # Tanpa order status yang ditentukan wajib error
+    with pytest.raises(ConfigError, match="requires specifying order status"):
+        cli.run("BTCUSDT", validate_setup=True, entry=100.0, tp=120.0)
+
+    # Konflik opsi --unfilled dan --filled
+    with pytest.raises(ConfigError, match="Cannot specify both --unfilled and --filled"):
+        cli.run(
+            "BTCUSDT",
+            validate_setup=True,
+            entry=100.0,
+            tp=120.0,
+            unfilled=True,
+            filled=True,
+        )
+
+    # Order status tidak valid
+    with pytest.raises(ConfigError, match="Invalid order status 'canceled'"):
+        cli.run(
+            "BTCUSDT",
+            validate_setup=True,
+            entry=100.0,
+            tp=120.0,
+            order_status="canceled",
+        )
+
     # Tanpa entry atau tp
     with pytest.raises(ConfigError, match="requires both --entry and --tp"):
-        cli.run("BTCUSDT", validate_setup=True, entry=100.0)
+        cli.run("BTCUSDT", validate_setup=True, entry=100.0, unfilled=True)
 
     with pytest.raises(ConfigError, match="requires both --entry and --tp"):
-        cli.run("BTCUSDT", validate_setup=True, tp=120.0)
+        cli.run("BTCUSDT", validate_setup=True, tp=120.0, unfilled=True)
 
     # TP == Entry
     with pytest.raises(ConfigError, match="--tp cannot be equal to --entry"):
-        cli.run("BTCUSDT", validate_setup=True, entry=100.0, tp=100.0)
+        cli.run("BTCUSDT", validate_setup=True, entry=100.0, tp=100.0, unfilled=True)
 
     # Direction tidak valid
     with pytest.raises(ConfigError, match="Invalid direction 'sideways'"):
@@ -270,6 +398,7 @@ def test_cli_validate_setup_validations() -> None:
             entry=100.0,
             tp=120.0,
             direction="sideways",
+            unfilled=True,
         )
 
     # Long setup dengan SL >= Entry
@@ -280,6 +409,7 @@ def test_cli_validate_setup_validations() -> None:
             entry=100.0,
             tp=120.0,
             sl=105.0,
+            unfilled=True,
         )
 
     # Short setup dengan SL <= Entry
@@ -290,6 +420,7 @@ def test_cli_validate_setup_validations() -> None:
             entry=100.0,
             tp=80.0,
             sl=95.0,
+            unfilled=True,
         )
 
     # Konflik mode --candles-only dan --validate-setup
@@ -300,6 +431,7 @@ def test_cli_validate_setup_validations() -> None:
             validate_setup=True,
             entry=100.0,
             tp=120.0,
+            unfilled=True,
         )
 
 
@@ -308,6 +440,7 @@ def test_cli_run_validate_setup_offline(tmp_path: Path) -> None:
     res = cli.run(
         "BTCUSDT",
         validate_setup=True,
+        unfilled=True,
         entry=50000.0,
         tp=55000.0,
         sl=48000.0,
@@ -330,6 +463,7 @@ def test_cli_run_validate_setup_offline(tmp_path: Path) -> None:
     assert "Senior ICT/SMC Risk & Setup Validator" in content
     assert "- **Pair/Aset:** BTCUSDT" in content
     assert "- **Level Entry yang Direncanakan:** 50000" in content
+    assert "- **Status Order Trader:** BELUM TERJEMPUT" in content
     assert "Data Candle Mentah" in content
 
 
@@ -338,6 +472,7 @@ def test_cli_run_dry_run_validate_setup(capsys: pytest.CaptureFixture[str]) -> N
     res = cli.run(
         "BTCUSDT",
         validate_setup=True,
+        unfilled=True,
         entry=65000.0,
         tp=70000.0,
         sl=63000.0,
@@ -351,7 +486,7 @@ def test_cli_run_dry_run_validate_setup(capsys: pytest.CaptureFixture[str]) -> N
     assert res.output_path == ""
     err = capsys.readouterr().err
     assert "DRY RUN — setup validation mode" in err
-    assert "direction=long entry=65000.0 tp=70000.0 sl=63000.0" in err
+    assert "direction=long order_status=unfilled entry=65000.0 tp=70000.0 sl=63000.0" in err
     assert "validate_interval=1h" in err
     assert "validate_candles=30" in err
 
@@ -364,6 +499,7 @@ def test_cli_main_click_runner(tmp_path: Path) -> None:
         [
             "BTCUSDT",
             "--validate-setup",
+            "--unfilled",
             "--entry",
             "50000",
             "--tp",

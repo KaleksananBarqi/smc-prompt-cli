@@ -4,12 +4,26 @@ Bertindaklah sebagai **Senior ICT/SMC Risk & Setup Validator**. Tugas Anda adala
 
 - **Pair/Aset:** {{PAIR}}
 - **Arah Setup:** {{DIRECTION}}
+- **Status Order Trader:** {{ORDER_STATUS_LABEL}}
 - **Level Entry yang Direncanakan:** {{ENTRY_PRICE}}
 - **Target Take Profit (TP / DOL):** {{TP_PRICE}}
 - **Level Stop Loss (SL):** {{SL_PRICE}}
 - **Harga Pasar Terkini:** {{CURRENT_PRICE}}
 - **Waktu Evaluasi (UTC):** {{GENERATED_AT_UTC}}
 - **Data Sumber:** {{provider}} ({{INTERVAL_LABEL}}, {{CANDLE_COUNT}} candle terakhir, closed)
+
+{% if IS_UNFILLED %}
+> ⚠️ **[FAKTA MUTLAK DARI TRADER & PANDUAN ANTI-HALUSINASI]:**
+> Trader menyatakan secara mutlak bahwa **LIMIT ORDER MASIH PENDING DI EXCHANGE DAN BELUM PERNAH TERISI / BELUM TERJEMPUT**.
+> **DILARANG KERAS** berhalusinasi atau berasumsi bahwa posisi ini sudah aktif, sudah rugi, atau sudah terkena Stop Loss berdasarkan histori candle lama di masa lalu sebelum order dipasang! Posisi trading saat ini **BELUM ADA DI PASAR**.
+> Tugas evaluasi Anda adalah:
+> 1. Memeriksa apakah pantulan harga terdekat (*Closest Approach*) telah melaju jauh (*front-runned*) ke target TP sehingga order harus **DIBATALKAN**.
+> 2. Memeriksa apakah target TP/DOL sudah tersapu duluan (*swept*) tanpa menjemput limit order, sehingga order harus **DIBATALKAN**.
+> 3. Memeriksa apakah setup **MASIH FRESH** sehingga limit order aman tetap dipasang.
+{% else %}
+> ℹ️ **[FAKTA MUTLAK DARI TRADER]:**
+> Trader menyatakan bahwa posisi **SUDAH TERJEMPUT (AKTIF BERJALAN DI PASAR)**. Fokus evaluasi Anda adalah *Trade Management* (apakah posisi aman menuju TP, perlu trailing stop, atau perlu exit bila terjadi tanda pelemahan struktur).
+{% endif %}
 
 > Seluruh angka di bawah adalah [FAKTA] pasar terverifikasi. Anda tidak memiliki akses ke visual chart di luar deret angka OHLCV yang diberikan.
 

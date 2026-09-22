@@ -233,7 +233,10 @@ dan [`smc_prompt/config.py`](smc_prompt/config.py).
 | `--candles-only` (atau `--review`) | flag | off | **Mode Post-Trade Review.** Hanya mengekspor data candle mentah (OHLCV) dan ringkasan pergerakan harga sesi ke berkas `.md` tanpa menyertakan template prompt analisis SMC pre-trade. |
 | `--review-interval` | interval Binance | `1h` | Interval candle untuk mode review (misal `15m`, `1h`, `4h`). |
 | `--review-candles` | `int` (5–500) | `30` | Jumlah candle closed yang diekspor pada mode review. |
-| `--validate-setup` (atau `--check-setup`) | flag | off | **Validasi Setup & Deteksi Front-Run.** Menghasilkan prompt terfokus untuk mengevaluasi apakah limit order/setup yang direncanakan masih valid, sudah ter-front-run, tersapu targetnya, atau sudah terjemput. |
+| `--validate-setup` (atau `--check-setup`) | flag | off | **Validasi Setup & Deteksi Front-Run.** Menghasilkan prompt terfokus untuk mengevaluasi apakah limit order/setup yang direncanakan masih valid, sudah ter-front-run, tersapu targetnya, atau sudah terjemput. **Wajib** menyertakan status order via `--unfilled` / `--filled` (atau `--order-status`). |
+| `--unfilled` | flag | off | **Kewajiban Status Order:** Menegaskan bahwa limit order masih pending di orderbook dan **belum terisi/terjemput**. Mencegah LLM berhalusinasi menganggap posisi sudah rugi/kena SL berdasarkan candle masa lalu. |
+| `--filled` | flag | off | **Kewajiban Status Order:** Menegaskan bahwa posisi **sudah terisi/terjemput** dan sedang aktif berjalan di pasar untuk evaluasi manajemen trade. |
+| `--order-status` (atau `--status`) | pilihan: `unfilled` \| `filled` | — | Opsi alternatif status order: `unfilled` (alias: `pending`) atau `filled` (alias: `triggered`). |
 | `--entry` | `float` | — | Level harga entry yang direncanakan (wajib untuk `--validate-setup`). |
 | `--tp` | `float` | — | Level harga Take Profit / target DOL yang direncanakan (wajib untuk `--validate-setup`). |
 | `--sl` | `float` | `None` | Level harga Stop Loss yang direncanakan (opsional untuk `--validate-setup`). |
@@ -561,25 +564,35 @@ Berkas ditulis ke `<output_dir>/<SYMBOL>-REVIEW-<TIMESTAMP>.md` dan disalin ke c
 
 Digunakan saat Anda telah memiliki rencana setup (misal limit order di Order Block atau FVG), tetapi ingin mengecek apakah harga sudah sempat mendekati entry lalu berbalik dan melaju ke arah target (*front-runned*), atau bahkan target TP/DOL sudah tercapai duluan sebelum entry terisi (*invalidated*).
 
+> ⚠️ **Kewajiban Parameter Status Order (`--unfilled` / `--filled`):**
+> Anda **wajib** memberitahu sistem apakah order Anda saat ini **belum terjemput** (`--unfilled`) atau **sudah terjemput** (`--filled`). 
+> Hal ini sangat krusial untuk **mencegah LLM berhalusinasi** menganggap posisi Anda sudah berjalan atau terkena Stop Loss berdasarkan histori pergerakan candle masa lalu sebelum order dipasang.
+> - Bila `--unfilled`: sistem hanya menganalisis pantulan harga terdekat (*Closest Approach*) yang relevan, menegaskan `entry_status: BELUM TERJEMPUT`, serta menyuntikkan instruksi tegas ke LLM agar tidak menganggap trade sudah aktif/kena SL.
+> - Bila `--filled`: sistem menyusun evaluasi *Trade Management* untuk memantau posisi aktif Anda menuju TP.
+
 ```bash
-# Validasi Long Setup (arah posisi otomatis disimpulkan long karena TP > Entry)
-smc-prompt BTCUSDT --validate-setup --entry 60000 --tp 62500 --sl 59000
+# 1. Validasi Long Setup yang BELUM TERJEMPUT (Limit Order masih pending)
+smc-prompt BTCUSDT --validate-setup --unfilled --entry 83700 --tp 88000 --sl 81700
 
-# Validasi Short Setup dengan kustomisasi interval dan jumlah candle
-smc-prompt ETHUSDT --validate-setup --entry 2500 --tp 2300 --sl 2580 --validate-interval 15m --validate-candles 60
+# 2. Validasi Short Setup yang BELUM TERJEMPUT dengan kustomisasi interval & candle
+smc-prompt ETHUSDT --validate-setup --unfilled --entry 2500 --tp 2300 --sl 2580 --validate-interval 15m --validate-candles 60
 
-# Alias --check-setup juga didukung
-smc-prompt SOLUSDT --check-setup --entry 140 --tp 155
+# 3. Validasi Setup yang SUDAH TERJEMPUT (Posisi sedang aktif berjalan di pasar)
+smc-prompt BTCUSDT --validate-setup --filled --entry 83700 --tp 88000 --sl 81700
+
+# 4. Menggunakan opsi eksplisit --order-status atau --status
+smc-prompt SOLUSDT --check-setup --status unfilled --entry 140 --tp 155
 ```
 
 Berkas ditulis ke `<output_dir>/<SYMBOL>-VALIDATION-<TIMESTAMP>.md` dan disalin ke clipboard. Prompt ini memuat:
-- **Fakta Kuantitatif:** Titik pendekatan terdekat (*closest approach*), selisih jarak ke entry (dalam harga dan normalisasi ATR), status mitigasi entry, status DOL, serta **Rasio Jelajah Target (*Target Travel Ratio*)**.
+- **Fakta Kuantitatif:** Status order trader (`BELUM TERJEMPUT` vs `SUDAH TERJEMPUT`), titik pendekatan terdekat (*closest approach*), selisih jarak ke entry (dalam harga dan normalisasi ATR), status mitigasi entry, status DOL, serta **Rasio Jelajah Target (*Target Travel Ratio*)**.
 - **Indikasi Status Mekanis:**
-  - `FRESH`: Harga belum terisi dan belum menempuh >=60% ke target TP. Setup masih segar.
-  - `FRONT_RUNNED`: Harga berbalik arah sebelum menyentuh entry dan telah menempuh >=60% menuju target TP. Risiko *chasing* tinggi.
+  - `FRESH`: Limit order belum terjemput dan belum menempuh >=60% ke target TP. Setup masih segar & valid.
+  - `FRONT_RUNNED`: Harga berbalik arah sebelum menyentuh entry dan telah menempuh >=60% menuju target TP. Risiko *chasing* tinggi / order rawan dibatalkan.
   - `DOL_REACHED`: Target TP/DOL telah tersapu sebelum level entry terjemput. Setup gugur (*invalidated*).
-  - `TRIGGERED`: Level entry sudah tersentuh/terlewati (posisi sudah aktif).
-  - `STOPPED_OUT`: Level SL sudah tertembus.
+  - `TRIGGERED`: Level entry sudah terisi (khusus status `--filled`).
+  - `STOPPED_OUT`: Level SL sudah tertembus (khusus status `--filled`).
+- **Guardrails Anti-Halusinasi:** Blok khusus peringatan tegas bagi LLM agar tidak mengasumsikan order aktif jika statusnya `--unfilled`.
 - **Tabel OHLCV CSV Mentah:** Riwayat pergerakan candle selama sequence pendekatan harga.
 - **Panduan Evaluasi Risiko LLM:** Format instruksi terstruktur bagi model AI untuk menilai toleransi spread, pelemahan struktur retracement, dan keputusan limit order (Pertahankan / Batalkan / Tunggu Re-entry).
 
