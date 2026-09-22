@@ -272,9 +272,9 @@ def provider_interval(provider: str, interval: str) -> str:
 # Numeric defaults
 # --------------------------------------------------------------------------
 
-DEFAULT_HTF_CANDLES: int = 60
+DEFAULT_HTF_CANDLES: int = 90
 DEFAULT_MTF_CANDLES: int = 186
-DEFAULT_LTF_CANDLES: int = 168
+DEFAULT_LTF_CANDLES: int = 192
 DEFAULT_SWING_LOOKBACK: int = 5
 DEFAULT_SWING_MERGE_ATR_MULT: Decimal = Decimal("0.5")
 DEFAULT_ATR_PERIOD: int = 14
