@@ -16,6 +16,7 @@ from decimal import Decimal
 import click
 
 from . import __version__, config as cfg
+from .bitunix_source import BitunixSource
 from .csv_source import LocalCsvSource
 from .data_fetcher import DataFetcher
 from .env_loader import load_env_file
@@ -144,13 +145,15 @@ def _make_provider_source(
     oanda_token: str | None,
     oanda_account_id: str | None,
     oanda_env: str,
-) -> TwelveDataSource | OandaSource:
+) -> TwelveDataSource | OandaSource | BitunixSource:
     """Build the configured network data source (Binance is built separately).
 
     Every provider exposes the same public shape, so the analysis pipeline below
     is untouched by the choice.
     """
 
+    if config.provider == cfg.PROVIDER_BITUNIX:
+        return BitunixSource(config)
     if config.provider == cfg.PROVIDER_TWELVEDATA:
         return TwelveDataSource(config, api_key=twelvedata_key or "")
     if config.provider == cfg.PROVIDER_OANDA:
@@ -514,7 +517,13 @@ def run(
     #   * Binance          — the default network provider (crypto)
     #   * Twelve Data / OANDA — network providers that can serve XAUUSD, which
     #     Binance Futures cannot (no fiat/forex/metal instruments)
-    fetcher: DataFetcher | LocalCsvSource | TwelveDataSource | OandaSource
+    fetcher: (
+        DataFetcher
+        | LocalCsvSource
+        | TwelveDataSource
+        | OandaSource
+        | BitunixSource
+    )
     if offline_mode:
         fetcher = LocalCsvSource(
             config,
@@ -867,19 +876,27 @@ def run(
     context_settings={"help_option_names": ["-h", "--help"]},
     help=(
         "Generate a mechanical SMC/ICT [FAKTA] prompt payload from read-only "
-        "public market data (Binance / Twelve Data / OANDA). Useful for FX and "
-        "metals (e.g. XAUUSD) which Binance Futures does not list. No LLM calls, "
-        "no reasoning, no trading."
+        "public market data (Binance / Bitunix / Twelve Data / OANDA). Useful for "
+        "crypto and FX/metals. Run without arguments or with -i for Interactive Mode. "
+        "No LLM calls, no reasoning, no trading."
     ),
 )
-@click.argument("symbol")
+@click.argument("symbol", required=False, default=None)
+@click.option(
+    "-i",
+    "--interactive",
+    "interactive",
+    is_flag=True,
+    default=False,
+    help="Luncurkan Terminal Interactive Wizard (mode panduan interaktif ramah pengguna).",
+)
 @click.option(
     "--provider",
     type=click.Choice(list(cfg.PROVIDERS)),
     default=cfg.PROVIDER_BINANCE,
     show_default=True,
     help=(
-        "Data provider. Binance serves crypto only; Twelve Data and OANDA "
+        "Data provider. Binance and Bitunix serve crypto; Twelve Data and OANDA "
         "serve spot FX/metals (XAUUSD)."
     ),
 )
@@ -1195,7 +1212,8 @@ def run(
 @click.option("--debug", is_flag=True, default=False, help="Print stack traces.")
 @click.version_option(version=__version__, prog_name=PROG)
 def main(
-    symbol: str,
+    symbol: str | None,
+    interactive: bool,
     htf_candles: int,
     mtf_candles: int,
     ltf_candles: int,
@@ -1236,9 +1254,18 @@ def main(
     no_dotenv: bool,
     debug: bool,
 ) -> None:
-    """CLI entrypoint. Parses args, then delegates to :func:`run`."""
+    """CLI entrypoint. Parses args, then delegates to :func:`run` or :func:`run_interactive_wizard`."""
 
     _ensure_utf8_streams()
+
+    # If --interactive is requested or no symbol is provided (and not in dry-run mode),
+    # launch the interactive wizard.
+    if interactive or (symbol is None and not dry_run):
+        from .interactive import run_interactive_wizard
+        run_interactive_wizard()
+        return
+
+    resolved_symbol = "" if symbol is None else symbol
 
     # .env is a convenience layer UNDER the shell environment (see
     # CREDENTIAL_PRECEDENCE): loading happens here, before run(), so the
@@ -1254,7 +1281,7 @@ def main(
 
     try:
         run(
-            symbol,
+            resolved_symbol,
             htf_candles=htf_candles,
             mtf_candles=mtf_candles,
             ltf_candles=ltf_candles,

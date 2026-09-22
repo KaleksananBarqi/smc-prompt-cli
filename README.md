@@ -211,7 +211,9 @@ dan [`smc_prompt/config.py`](smc_prompt/config.py).
 
 | Flag / Argumen | Tipe | Default | Keterangan |
 |---|---|---|---|
-| `SYMBOL` | positional `str` | — | Simbol Binance Spot, mis. `BTCUSDT`. Case-insensitive; dinormalisasi ke huruf besar. Wajib diisi. |
+| `SYMBOL` | positional `str` | `None` (opsional) | Simbol instrumen (mis. `BTCUSDT`, `ETHUSDT` untuk crypto; `XAUUSD` untuk FX/logam). Jika tidak diisi, otomatis meluncurkan **Terminal Interactive Mode**. |
+| `-i`, `--interactive` | flag | off | **Terminal Interactive Mode.** Menjalankan panduan interaktif ramah pengguna langkah-demi-langkah (pilih provider, ticker, aksi) dengan smart defaults untuk timeframe. |
+| `--provider` | pilihan: `binance` \| `bitunix` \| `twelvedata` \| `oanda` | `binance` | Sumber data market data. `binance` dan `bitunix` untuk crypto (USDT-M Futures); `twelvedata` dan `oanda` untuk spot FX dan logam mulia (`XAUUSD`). |
 | `--htf-interval` | interval Binance | `1d` | Interval kline Binance untuk seri HTF. Nilai valid: `1m,3m,5m,15m,30m,1h,2h,4h,6h,8h,12h,1d,3d,1w,1M`. Nilai di luar daftar ditolak dengan exit code `2`. |
 | `--mtf-interval` | interval Binance | `4h` | Interval kline Binance untuk seri MTF (medium). Daftar nilai valid sama dengan `--htf-interval`. Harus berbeda dari dua tier lainnya. |
 | `--ltf-interval` | interval Binance | `1h` | Interval kline Binance untuk seri LTF. Daftar nilai valid sama dengan `--htf-interval`. Harus berbeda dari dua tier lainnya. |
@@ -300,10 +302,31 @@ konstanta `DEFAULT_BASE_URLS`.
 ### Examples
 
 Bagian ini berisi contoh siap-tempel (copy-paste) untuk skenario umum. Semua
-contoh menggunakan CLI yang sudah terpasang (`smc-prompt`). Bila belum
-menginstal paket, ganti `smc-prompt` dengan `python -m smc_prompt`.
+#### 0. Mode Terminal Interaktif (Interactive Wizard)
 
-#### 1. Menjalankan standar (default) pada BTCUSDT
+Jika Anda tidak ingin menghafal perintah atau opsi one-liner, cukup jalankan `smc-prompt` tanpa argumen apa pun (atau gunakan flag `-i`):
+
+```bash
+smc-prompt
+# atau
+smc-prompt -i
+```
+
+CLI akan memandu Anda langkah-demi-langkah:
+1. Memilih asal data (Binance, Bitunix, Twelve Data, OANDA, atau CSV lokal).
+2. Memilih simbol/ticker (mis. `BTCUSDT`, `ETHUSDT`, `XAUUSD`).
+3. Memilih tindakan (Generate Prompt SMC/ICT, Review Pasca-Trade, atau Validasi Setup).
+4. **Smart Defaults Timeframe:** Cukup tekan `ENTER` untuk menyetujui paket timeframe standar tanpa perlu mengetik ulang!
+
+#### 0b. Mengambil data dari Bitunix Futures (USDT-M)
+
+Mengambil data candlestick dan harga live langsung dari exchange **Bitunix Futures** secara publik (tanpa memerlukan API key):
+
+```bash
+smc-prompt BTCUSDT --provider bitunix
+```
+
+#### 1. Menjalankan standar (default) pada BTCUSDT (Binance Futures)
 
 Menghasilkan prompt dengan 60 candle daily HTF, 100 candle hourly LTF,
 `--swing-lookback 5`, referensi jarak `nearest`, dan ATR(14) aktif.

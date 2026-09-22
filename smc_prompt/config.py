@@ -113,10 +113,12 @@ DEFAULT_BASE_URLS: tuple[str, ...] = (
 # ST> cannot serve (no fiat/metal instruments listed).
 
 PROVIDER_BINANCE: str = "binance"
+PROVIDER_BITUNIX: str = "bitunix"
 PROVIDER_TWELVEDATA: str = "twelvedata"
 PROVIDER_OANDA: str = "oanda"
 PROVIDERS: tuple[str, ...] = (
     PROVIDER_BINANCE,
+    PROVIDER_BITUNIX,
     PROVIDER_TWELVEDATA,
     PROVIDER_OANDA,
 )
@@ -124,8 +126,26 @@ PROVIDERS: tuple[str, ...] = (
 #: Human-readable provider names used in messages / the prompt banner.
 PROVIDER_LABELS: dict[str, str] = {
     PROVIDER_BINANCE: "Binance",
+    PROVIDER_BITUNIX: "Bitunix",
     PROVIDER_TWELVEDATA: "Twelve Data",
     PROVIDER_OANDA: "OANDA",
+}
+
+#: Canonical interval -> Bitunix ``interval`` parameter.
+BITUNIX_INTERVAL_MAP: dict[str, str] = {
+    "1m": "1m",
+    "5m": "5m",
+    "15m": "15m",
+    "30m": "30m",
+    "1h": "1h",
+    "2h": "2h",
+    "4h": "4h",
+    "6h": "6h",
+    "8h": "8h",
+    "12h": "12h",
+    "1d": "1d",
+    "3d": "3d",
+    "1w": "1w",
 }
 
 #: Canonical (Binance-style) interval -> Twelve Data ``interval`` parameter.
@@ -156,6 +176,9 @@ OANDA_INTERVAL_MAP: dict[str, str] = {
     "1w": "W",
     "1M": "M",
 }
+
+#: Default Bitunix Futures host.
+BITUNIX_HOST: str = "https://fapi.bitunix.com"
 
 #: Default OANDA v20 host. ``practice`` (demo) is the default because a free
 #: practice account is enough to read candles; ``live`` needs a funded account.
@@ -196,7 +219,7 @@ def provider_label(provider: str) -> str:
 def provider_symbol(provider: str, symbol: str) -> str:
     """Map a canonical uppercase symbol to the provider's instrument code.
 
-    Binance uses the canonical spelling verbatim. The FX providers accept a
+    Binance and Bitunix use the canonical spelling verbatim. The FX providers accept a
     separated form (``XAU/USD`` for Twelve Data, ``XAU_USD`` for OANDA); the
     explicit :data:`PROVIDER_SYMBOLS` table covers the metallic pairs, and a
     deterministic 6-letter FX heuristic (``EURUSD`` -> ``EUR/USD`` /
@@ -205,7 +228,7 @@ def provider_symbol(provider: str, symbol: str) -> str:
     """
 
     normalized = (symbol or "").strip().upper()
-    if provider == PROVIDER_BINANCE:
+    if provider in (PROVIDER_BINANCE, PROVIDER_BITUNIX):
         return normalized
 
     explicit = PROVIDER_SYMBOLS.get(provider, {})
@@ -228,7 +251,9 @@ def provider_interval(provider: str, interval: str) -> str:
     if provider == PROVIDER_BINANCE:
         return interval
 
-    if provider == PROVIDER_TWELVEDATA:
+    if provider == PROVIDER_BITUNIX:
+        table = BITUNIX_INTERVAL_MAP
+    elif provider == PROVIDER_TWELVEDATA:
         table = TWELVEDATA_INTERVAL_MAP
     elif provider == PROVIDER_OANDA:
         table = OANDA_INTERVAL_MAP
