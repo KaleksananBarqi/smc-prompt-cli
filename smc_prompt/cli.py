@@ -235,6 +235,7 @@ def _print_resolved_settings(
     order_status: str | None = None,
     outcome: str | None = None,
     notes: str | None = None,
+    exit_price: float | None = None,
     validate_interval: str = cfg.DEFAULT_VALIDATE_INTERVAL,
     validate_candles: int = cfg.DEFAULT_VALIDATE_CANDLES,
 ) -> None:
@@ -267,6 +268,8 @@ def _print_resolved_settings(
             journal_info.append(f"tp={tp}")
         if outcome:
             journal_info.append(f"outcome={outcome}")
+        if exit_price is not None:
+            journal_info.append(f"exit={exit_price}")
         if notes:
             journal_info.append(f"notes={notes}")
 
@@ -395,6 +398,7 @@ def run(
     filled: bool = False,
     outcome: str | None = None,
     notes: str | None = None,
+    exit_price: float | None = None,
     validate_interval: str = cfg.DEFAULT_VALIDATE_INTERVAL,
     validate_candles: int = cfg.DEFAULT_VALIDATE_CANDLES,
 ) -> RunResult:
@@ -534,6 +538,7 @@ def run(
             order_status=resolved_order_status,
             outcome=outcome,
             notes=notes,
+            exit_price=exit_price,
             validate_interval=validate_interval,
             validate_candles=validate_candles,
         )
@@ -643,6 +648,7 @@ def run(
             entry_price=Decimal(str(entry)) if entry is not None else None,
             sl_price=Decimal(str(sl)) if sl is not None else None,
             tp_price=Decimal(str(tp)) if tp is not None else None,
+            exit_price=Decimal(str(exit_price)) if exit_price is not None else None,
             outcome=outcome,
             notes=notes,
         )
@@ -1204,6 +1210,19 @@ def run(
     help="Evaluation / journal notes for post-trade review.",
 )
 @click.option(
+    "--exit-price",
+    "--exit",
+    "--hit-price",
+    "exit_price",
+    type=float,
+    default=None,
+    help=(
+        "Actual exit / hit price level for post-trade review journal. "
+        "Used to calculate Realized PnL points and R-Multiple. "
+        "Defaults are suggested by wizard based on trade outcome (Hit TP/SL/BE)."
+    ),
+)
+@click.option(
     "--order-status",
     "--status",
     "order_status",
@@ -1301,6 +1320,7 @@ def main(
     direction: str | None,
     outcome: str | None,
     notes: str | None,
+    exit_price: float | None,
     order_status: str | None,
     unfilled: bool,
     filled: bool,
@@ -1371,6 +1391,7 @@ def main(
             direction=direction,
             outcome=outcome,
             notes=notes,
+            exit_price=exit_price,
             order_status=order_status,
             unfilled=unfilled,
             filled=filled,

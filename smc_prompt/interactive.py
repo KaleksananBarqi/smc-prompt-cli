@@ -133,6 +133,7 @@ def run_interactive_wizard() -> None:
         review_tp: float | None = None
         review_outcome: str | None = None
         review_notes: str | None = None
+        review_exit: float | None = None     # Level Exit / Harga Hit riil
 
         validate_setup = False
         entry_price: float | None = None
@@ -225,6 +226,31 @@ def run_interactive_wizard() -> None:
                 ]
                 review_outcome = _prompt_choice("Hasil Akhir Trade:", outcome_opts, default_index=0)
 
+                # Prompt Level Exit / Harga Hit dengan smart default berbasis outcome
+                exit_default = ""
+                exit_default_hint = "kosongkan jika belum ada"
+                if review_outcome == "Hit TP" and review_tp is not None:
+                    exit_default = str(review_tp)
+                    exit_default_hint = f"default TP = {review_tp}"
+                elif review_outcome == "Hit SL" and review_sl is not None:
+                    exit_default = str(review_sl)
+                    exit_default_hint = f"default SL = {review_sl}"
+                elif review_outcome == "BE" and review_entry is not None:
+                    exit_default = str(review_entry)
+                    exit_default_hint = f"default Entry = {review_entry}"
+
+                exit_prompt_label = f"Level Exit / Harga Hit ({exit_default_hint})"
+                exit_input = click.prompt(
+                    exit_prompt_label,
+                    default=exit_default,
+                    show_default=bool(exit_default),
+                ).strip()
+                if exit_input:
+                    try:
+                        review_exit = float(exit_input)
+                    except ValueError:
+                        review_exit = None
+
                 notes_input = click.prompt(
                     "Evaluasi / Catatan (misal: reaksi harga di FVG, liquidity sweep, dll.)",
                     default="",
@@ -291,6 +317,8 @@ def run_interactive_wizard() -> None:
                 cli_parts.append(f"--tp {review_tp}")
             if review_outcome:
                 cli_parts.append(f'--outcome "{review_outcome}"')
+            if review_exit is not None:
+                cli_parts.append(f"--exit {review_exit}")
             if review_notes:
                 clean_notes = review_notes.replace('"', '\\"')
                 cli_parts.append(f'--notes "{clean_notes}"')
@@ -334,7 +362,7 @@ def run_interactive_wizard() -> None:
             click.echo(f"  * Timeframes     : HTF={htf_interval} ({htf_candles}c) | MTF={mtf_interval} ({mtf_candles}c) | LTF={ltf_interval} ({ltf_candles}c)")
         elif action == "review":
             click.echo(f"  * Interval/Count : {review_interval} ({review_candles} candles)")
-            if review_direction or review_entry is not None or review_outcome:
+            if review_direction or review_entry is not None or review_outcome or review_exit is not None:
                 parts = []
                 if review_direction:
                     parts.append(f"Arah={review_direction.capitalize()}")
@@ -344,6 +372,8 @@ def run_interactive_wizard() -> None:
                     parts.append(f"SL={review_sl}")
                 if review_tp is not None:
                     parts.append(f"TP={review_tp}")
+                if review_exit is not None:
+                    parts.append(f"Exit={review_exit}")
                 if review_outcome:
                     parts.append(f"Hasil={review_outcome}")
                 click.echo(f"  * Jurnal Trade   : {' | '.join(parts)}")
@@ -406,6 +436,7 @@ def run_interactive_wizard() -> None:
             direction=resolved_direction,
             outcome=review_outcome,
             notes=review_notes,
+            exit_price=review_exit,
             order_status=order_status,
             validate_interval=validate_interval,
             validate_candles=validate_candles,

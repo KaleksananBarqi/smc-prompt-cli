@@ -69,6 +69,7 @@ def test_interactive_wizard_review_with_journal() -> None:
             "64500",     # Stop Loss
             "66500",     # Take Profit
             "1",         # Hasil: Hit TP
+            "66500",     # Level Exit / Harga Hit (default TP, tekan Enter / konfirmasi)
             "Reaksi FVG mantap",  # Catatan
         ]
         mock_confirm.side_effect = [
@@ -88,6 +89,7 @@ def test_interactive_wizard_review_with_journal() -> None:
         assert kwargs["sl"] == 64500.0
         assert kwargs["tp"] == 66500.0
         assert kwargs["outcome"] == "Hit TP"
+        assert kwargs["exit_price"] == 66500.0
         assert kwargs["notes"] == "Reaksi FVG mantap"
 
 

@@ -90,6 +90,7 @@ class TradeJournalSpec:
     entry_price: Decimal | None = None
     sl_price: Decimal | None = None
     tp_price: Decimal | None = None
+    exit_price: Decimal | None = None       # Harga riil saat posisi ditutup / hit
     outcome: str | None = None
     notes: str | None = None
 
@@ -101,6 +102,7 @@ class TradeJournalSpec:
             self.entry_price is not None,
             self.sl_price is not None,
             self.tp_price is not None,
+            self.exit_price is not None,
             self.outcome,
             self.notes,
         ])
@@ -115,6 +117,105 @@ class TradeJournalSpec:
         if risk == Decimal(0):
             return None
         return (reward / risk).quantize(Decimal("0.01"))
+
+    @property
+    def realized_pnl_points(self) -> Decimal | None:
+        """Selisih poin harga riil yang terealisasi (exit vs entry)."""
+        if self.entry_price is None or self.exit_price is None:
+            return None
+        is_short = (self.direction or "").lower() == "short"
+        diff = (
+            self.entry_price - self.exit_price
+            if is_short
+            else self.exit_price - self.entry_price
+        )
+        return diff
+
+    @property
+    def realized_r_multiple(self) -> Decimal | None:
+        """Realisasi R-Multiple dari trade (Realized R)."""
+        pnl = self.realized_pnl_points
+        if pnl is None or self.entry_price is None or self.sl_price is None:
+            return None
+        risk = abs(self.entry_price - self.sl_price)
+        if risk == Decimal(0):
+            return None
+        return (pnl / risk).quantize(Decimal("0.01"))
+
+
+def _build_ai_guide(
+    j: "TradeJournalSpec",
+    fmt: "object",  # callable PriceFormat.fmt
+) -> list[str]:
+    """Susun blok panduan evaluasi terstruktur untuk LLM berdasarkan data jurnal.
+
+    Blok ini memastikan model AI tidak perlu menebak harga entry/exit, sehingga
+    analisis yang dihasilkan lebih akurat dan tidak berhalusinasi.
+    """
+    # Callable fmt diterima sebagai Any dari closure render_review_markdown
+    _fmt = fmt  # type: ignore[assignment]
+
+    lines: list[str] = []
+    lines.append("> 💡 **Panduan Evaluasi untuk AI (SMC/ICT Post-Trade Review):**")
+    lines.append(
+        "> Evaluasi trade di atas berdasarkan sekuens pergerakan harga pada Data Candle Mentah (OHLCV) di bawah."
+    )
+    lines.append("> Berikan analisis objektif mencakup:")
+
+    q_num = 1
+
+    # Pertanyaan kualitas entry
+    if j.entry_price is not None:
+        discount_word = "area Discount/POI" if (j.direction or "").lower() == "long" else "area Premium/POI"
+        lines.append(
+            f"> {q_num}. **Kualitas Entry:** Apakah eksekusi entry di {_fmt(j.entry_price)}"
+            f" sudah tepat pada {discount_word}?"
+        )
+        q_num += 1
+
+    # Pertanyaan perjalanan harga & trade management
+    if j.entry_price is not None and j.exit_price is not None:
+        pnl = j.realized_pnl_points
+        realized_r = j.realized_r_multiple
+        r_sign = "+" if (realized_r or Decimal(0)) >= Decimal(0) else ""
+        pnl_sign = "+" if (pnl or Decimal(0)) >= Decimal(0) else ""
+        pnl_str = f"{pnl_sign}{_fmt(pnl)} poin" if pnl is not None else "N/A"
+        r_str = f"{r_sign}{realized_r}R" if realized_r is not None else "N/A"
+        lines.append(
+            f"> {q_num}. **Trade Management \u0026 Perjalanan Harga:** Seberapa jauh harga sempat"
+            f" menguntungkan sebelum berbalik arah? Apakah ada sinyal struktural (CHoCH /"
+            f" liquidity sweep) yang dapat digunakan untuk mengamankan profit lebih awal?"
+        )
+        q_num += 1
+
+        lines.append(
+            f"> {q_num}. **Keputusan Exit:** Apakah penutupan di {_fmt(j.exit_price)}"
+            f" ({r_str} / {pnl_str})"
+            f" merupakan keputusan yang optimal berdasarkan struktur pasar saat itu?"
+        )
+        q_num += 1
+    elif j.exit_price is not None:
+        lines.append(
+            f"> {q_num}. **Keputusan Exit:** Apakah penutupan di {_fmt(j.exit_price)}"
+            f" merupakan keputusan yang optimal berdasarkan struktur pasar saat itu?"
+        )
+        q_num += 1
+
+    # Pertanyaan SL placement
+    if j.sl_price is not None and j.entry_price is not None:
+        lines.append(
+            f"> {q_num}. **Penempatan SL:** Apakah SL di {_fmt(j.sl_price)} sudah ditempatkan"
+            f" di balik struktur yang valid (below swing low / above swing high)?"
+        )
+        q_num += 1
+
+    # Rekomendasi
+    lines.append(
+        f"> {q_num}. **Rekomendasi:** Apa aturan manajemen risiko atau trade management yang"
+        f" perlu diperbaiki untuk setup serupa berikutnya?"
+    )
+
+    return lines
 
 
 def render_review_markdown(
@@ -166,11 +267,16 @@ def render_review_markdown(
             if j.entry_price is not None
             else "- [ ] **Level Entry:**"
         )
-        sl_line = (
-            f"- [x] **Stop Loss (SL):** {fmt(j.sl_price)}"
-            if j.sl_price is not None
-            else "- [ ] **Stop Loss (SL):**"
-        )
+
+        if j.sl_price is not None:
+            risk_pts = (
+                abs(j.entry_price - j.sl_price) if j.entry_price is not None else None
+            )
+            risk_str = f" (Risk: {fmt(risk_pts)} poin)" if risk_pts is not None else ""
+            sl_line = f"- [x] **Stop Loss (SL):** {fmt(j.sl_price)}{risk_str}"
+        else:
+            sl_line = "- [ ] **Stop Loss (SL):**"
+
         if j.tp_price is not None:
             rr = j.risk_reward_ratio
             rr_str = f" (Planned R:R 1:{rr})" if rr is not None else ""
@@ -178,11 +284,28 @@ def render_review_markdown(
         else:
             tp_line = "- [ ] **Take Profit (TP):**"
 
-        outcome_line = (
-            f"- [x] **Hasil Akhir:** {j.outcome}"
-            if j.outcome
-            else "- [ ] **Hasil Akhir:** Hit TP / Hit SL / BE / Cut Manual"
-        )
+        # Baris Level Exit (Harga Hit) - harga riil saat posisi ditutup
+        if j.exit_price is not None:
+            exit_line = f"- [x] **Level Exit (Harga Hit):** {fmt(j.exit_price)}"
+        else:
+            exit_line = "- [ ] **Level Exit (Harga Hit):**"
+
+        # Baris Hasil Akhir + Realized R-Multiple jika data cukup
+        if j.outcome:
+            realized_r = j.realized_r_multiple
+            pnl = j.realized_pnl_points
+            if realized_r is not None and pnl is not None:
+                r_sign = "+" if realized_r >= Decimal(0) else ""
+                pnl_sign = "+" if pnl >= Decimal(0) else ""
+                realized_str = (
+                    f" (Realized: {r_sign}{realized_r}R | PnL: {pnl_sign}{fmt(pnl)} poin)"
+                )
+            else:
+                realized_str = ""
+            outcome_line = f"- [x] **Hasil Akhir:** {j.outcome}{realized_str}"
+        else:
+            outcome_line = "- [ ] **Hasil Akhir:** Hit TP / Hit SL / BE / Cut Manual"
+
         if j.notes:
             notes_lines = [
                 "- [x] **Evaluasi / Catatan:**",
@@ -193,13 +316,27 @@ def render_review_markdown(
                 "- [ ] **Evaluasi / Catatan:**",
                 "  > *Tulis evaluasi di sini (misal: reaksi harga di FVG, liquidity sweep, eksekusi, dll.)...*",
             ]
-        journal_lines = [dir_line, entry_line, sl_line, tp_line, outcome_line, *notes_lines]
+        journal_lines = [
+            dir_line,
+            entry_line,
+            sl_line,
+            tp_line,
+            exit_line,
+            outcome_line,
+            *notes_lines,
+        ]
+
+        # Blok panduan evaluasi AI — aktif hanya jika ada data numerik yang presisi
+        if j.entry_price is not None or j.exit_price is not None:
+            ai_guide_lines = _build_ai_guide(j, fmt)
+            journal_lines += ["", "---", ""] + ai_guide_lines
     else:
         journal_lines = [
             "- [ ] **Arah Posisi:** Long / Short",
             "- [ ] **Level Entry:**",
             "- [ ] **Stop Loss (SL):**",
             "- [ ] **Take Profit (TP):**",
+            "- [ ] **Level Exit (Harga Hit):**",
             "- [ ] **Hasil Akhir:** Hit TP / Hit SL / BE / Cut Manual",
             "- [ ] **Evaluasi / Catatan:**",
             "  > *Tulis evaluasi di sini (misal: reaksi harga di FVG, liquidity sweep, eksekusi, dll.)...*",
