@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
-from smc_prompt import cli, interactive
+from smc_prompt import cli, config as cfg, interactive
 
 
 def test_cli_launches_interactive_when_no_symbol() -> None:
@@ -50,9 +50,75 @@ def test_interactive_wizard_default_run() -> None:
         args, kwargs = mock_run.call_args
         assert args[0] == "BTCUSDT"
         assert kwargs["provider"] == "binance"
-        assert kwargs["htf_interval"] == "1d"
-        assert kwargs["mtf_interval"] == "4h"
-        assert kwargs["ltf_interval"] == "1h"
+        assert kwargs["htf_interval"] == cfg.HTF_INTERVAL
+        assert kwargs["mtf_interval"] == cfg.MTF_INTERVAL
+        assert kwargs["ltf_interval"] == cfg.LTF_INTERVAL
+
+
+def test_interactive_wizard_review_with_journal() -> None:
+    with patch("smc_prompt.cli.run") as mock_run, \
+         patch("click.prompt") as mock_prompt, \
+         patch("click.confirm") as mock_confirm:
+
+        mock_prompt.side_effect = [
+            "1",         # Provider: Binance
+            "BTCUSDT",   # Symbol
+            "2",         # Action: Review Pasca-Trade
+            "1",         # Arah: Long
+            "65000",     # Level Entry
+            "64500",     # Stop Loss
+            "66500",     # Take Profit
+            "1",         # Hasil: Hit TP
+            "Reaksi FVG mantap",  # Catatan
+        ]
+        mock_confirm.side_effect = [
+            True,   # default review interval & candles
+            True,   # fill journal?
+            False,  # print stdout
+            True,   # execute run
+        ]
+
+        interactive.run_interactive_wizard()
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[0] == "BTCUSDT"
+        assert kwargs["candles_only"] is True
+        assert kwargs["direction"] == "long"
+        assert kwargs["entry"] == 65000.0
+        assert kwargs["sl"] == 64500.0
+        assert kwargs["tp"] == 66500.0
+        assert kwargs["outcome"] == "Hit TP"
+        assert kwargs["notes"] == "Reaksi FVG mantap"
+
+
+def test_interactive_wizard_review_skip_journal() -> None:
+    with patch("smc_prompt.cli.run") as mock_run, \
+         patch("click.prompt") as mock_prompt, \
+         patch("click.confirm") as mock_confirm:
+
+        mock_prompt.side_effect = [
+            "1",         # Provider: Binance
+            "BTCUSDT",   # Symbol
+            "2",         # Action: Review Pasca-Trade
+        ]
+        mock_confirm.side_effect = [
+            True,   # default review interval & candles
+            False,  # fill journal? (Skip)
+            False,  # print stdout
+            True,   # execute run
+        ]
+
+        interactive.run_interactive_wizard()
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[0] == "BTCUSDT"
+        assert kwargs["candles_only"] is True
+        assert kwargs["direction"] is None
+        assert kwargs["entry"] is None
+        assert kwargs["sl"] is None
+        assert kwargs["tp"] is None
+        assert kwargs["outcome"] is None
+        assert kwargs["notes"] is None
 
 
 def test_interactive_wizard_bitunix_selection() -> None:

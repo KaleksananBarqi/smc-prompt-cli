@@ -127,6 +127,12 @@ def run_interactive_wizard() -> None:
         candles_only = False
         review_interval = cfg.DEFAULT_REVIEW_INTERVAL
         review_candles = cfg.DEFAULT_REVIEW_CANDLES
+        review_direction: str | None = None
+        review_entry: float | None = None
+        review_sl: float | None = None
+        review_tp: float | None = None
+        review_outcome: str | None = None
+        review_notes: str | None = None
 
         validate_setup = False
         entry_price: float | None = None
@@ -164,6 +170,68 @@ def run_interactive_wizard() -> None:
             if not use_default_review:
                 review_interval = click.prompt("Interval candle (e.g. 1h, 15m, 4h)", default=review_interval)
                 review_candles = click.prompt("Jumlah closed candle yang diekspor", type=int, default=review_candles)
+
+            click.echo("")
+            fill_journal = click.confirm(
+                click.style("Ingin melengkapi jurnal & evaluasi trade sekarang? (Tekan Enter jika Ya)", fg="bright_white", bold=True),
+                default=True,
+            )
+            if fill_journal:
+                click.secho("  --- Input Data Jurnal & Evaluasi Trade ---", fg="cyan")
+                dir_opts = [
+                    ("long", "Long (Beli / Naik)"),
+                    ("short", "Short (Jual / Turun)"),
+                ]
+                review_direction = _prompt_choice("Arah Posisi:", dir_opts, default_index=0)
+
+                entry_input = click.prompt(
+                    "Level Entry (harga masuk, kosongkan jika belum ada)",
+                    default="",
+                    show_default=False,
+                ).strip()
+                if entry_input:
+                    try:
+                        review_entry = float(entry_input)
+                    except ValueError:
+                        review_entry = None
+
+                sl_input = click.prompt(
+                    "Stop Loss (SL) (opsional, kosongkan jika belum ada)",
+                    default="",
+                    show_default=False,
+                ).strip()
+                if sl_input:
+                    try:
+                        review_sl = float(sl_input)
+                    except ValueError:
+                        review_sl = None
+
+                tp_input = click.prompt(
+                    "Take Profit (TP) (opsional, kosongkan jika belum ada)",
+                    default="",
+                    show_default=False,
+                ).strip()
+                if tp_input:
+                    try:
+                        review_tp = float(tp_input)
+                    except ValueError:
+                        review_tp = None
+
+                outcome_opts = [
+                    ("Hit TP", "Hit TP (Target Profit Tercapai)"),
+                    ("Hit SL", "Hit SL (Stop Loss Kena)"),
+                    ("BE", "BE (Break-Even / Impas)"),
+                    ("Cut Manual", "Cut Manual (Ditutup Manual Sebelum TP/SL)"),
+                ]
+                review_outcome = _prompt_choice("Hasil Akhir Trade:", outcome_opts, default_index=0)
+
+                notes_input = click.prompt(
+                    "Evaluasi / Catatan (misal: reaksi harga di FVG, liquidity sweep, dll.)",
+                    default="",
+                    show_default=False,
+                ).strip()
+                if notes_input:
+                    review_notes = notes_input
 
         elif action == "validate":
             validate_setup = True
@@ -213,6 +281,19 @@ def run_interactive_wizard() -> None:
                 cli_parts.append(f"--review-interval {review_interval}")
             if review_candles != cfg.DEFAULT_REVIEW_CANDLES:
                 cli_parts.append(f"--review-candles {review_candles}")
+            if review_direction:
+                cli_parts.append(f"--direction {review_direction}")
+            if review_entry is not None:
+                cli_parts.append(f"--entry {review_entry}")
+            if review_sl is not None:
+                cli_parts.append(f"--sl {review_sl}")
+            if review_tp is not None:
+                cli_parts.append(f"--tp {review_tp}")
+            if review_outcome:
+                cli_parts.append(f'--outcome "{review_outcome}"')
+            if review_notes:
+                clean_notes = review_notes.replace('"', '\\"')
+                cli_parts.append(f'--notes "{clean_notes}"')
         elif action == "validate":
             cli_parts.append("--validate-setup")
             if entry_price is not None:
@@ -253,6 +334,22 @@ def run_interactive_wizard() -> None:
             click.echo(f"  * Timeframes     : HTF={htf_interval} ({htf_candles}c) | MTF={mtf_interval} ({mtf_candles}c) | LTF={ltf_interval} ({ltf_candles}c)")
         elif action == "review":
             click.echo(f"  * Interval/Count : {review_interval} ({review_candles} candles)")
+            if review_direction or review_entry is not None or review_outcome:
+                parts = []
+                if review_direction:
+                    parts.append(f"Arah={review_direction.capitalize()}")
+                if review_entry is not None:
+                    parts.append(f"Entry={review_entry}")
+                if review_sl is not None:
+                    parts.append(f"SL={review_sl}")
+                if review_tp is not None:
+                    parts.append(f"TP={review_tp}")
+                if review_outcome:
+                    parts.append(f"Hasil={review_outcome}")
+                click.echo(f"  * Jurnal Trade   : {' | '.join(parts)}")
+            if review_notes:
+                preview = review_notes if len(review_notes) <= 50 else review_notes[:47] + "..."
+                click.echo(f"  * Catatan        : {preview}")
         elif action == "validate":
             click.echo(f"  * Setup Params   : Entry={entry_price}, TP={tp_price}, SL={sl_price or '-'}, Status={order_status}")
         click.echo(f"  * Output         : File di folder output/ & Otomatis Copy ke Clipboard")
@@ -278,6 +375,11 @@ def run_interactive_wizard() -> None:
 
         actual_provider = cfg.PROVIDER_BINANCE if provider == "csv" else provider
 
+        resolved_entry = review_entry if action == "review" else entry_price
+        resolved_tp = review_tp if action == "review" else tp_price
+        resolved_sl = review_sl if action == "review" else sl_price
+        resolved_direction = review_direction if action == "review" else None
+
         run(
             symbol,
             htf_candles=htf_candles,
@@ -298,9 +400,12 @@ def run_interactive_wizard() -> None:
             review_interval=review_interval,
             review_candles=review_candles,
             validate_setup=validate_setup,
-            entry=entry_price,
-            tp=tp_price,
-            sl=sl_price,
+            entry=resolved_entry,
+            tp=resolved_tp,
+            sl=resolved_sl,
+            direction=resolved_direction,
+            outcome=review_outcome,
+            notes=review_notes,
             order_status=order_status,
             validate_interval=validate_interval,
             validate_candles=validate_candles,

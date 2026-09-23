@@ -31,7 +31,7 @@ from .errors import (
 from .oanda_source import OandaSource
 from .output import deliver
 from .provider_base import price_sanity_warning
-from .review_renderer import render_review_markdown
+from .review_renderer import TradeJournalSpec, render_review_markdown
 from .setup_validator import (
     SetupSpec,
     analyze_setup,
@@ -233,6 +233,8 @@ def _print_resolved_settings(
     sl: float | None = None,
     direction: str | None = None,
     order_status: str | None = None,
+    outcome: str | None = None,
+    notes: str | None = None,
     validate_interval: str = cfg.DEFAULT_VALIDATE_INTERVAL,
     validate_candles: int = cfg.DEFAULT_VALIDATE_CANDLES,
 ) -> None:
@@ -254,6 +256,20 @@ def _print_resolved_settings(
         )
 
     if candles_only:
+        journal_info: list[str] = []
+        if direction:
+            journal_info.append(f"direction={direction}")
+        if entry is not None:
+            journal_info.append(f"entry={entry}")
+        if sl is not None:
+            journal_info.append(f"sl={sl}")
+        if tp is not None:
+            journal_info.append(f"tp={tp}")
+        if outcome:
+            journal_info.append(f"outcome={outcome}")
+        if notes:
+            journal_info.append(f"notes={notes}")
+
         lines = [
             f"[{PROG}] DRY RUN — review mode, no file written, no klines fetched.",
             f"[{PROG}] symbol={config.symbol}",
@@ -261,8 +277,10 @@ def _print_resolved_settings(
             f"[{PROG}] data source={source}",
             f"[{PROG}] review_interval={review_interval} ({cfg.interval_label(review_interval)})",
             f"[{PROG}] review_candles={review_candles}",
-            f"[{PROG}] output_dir={config.output_dir} stdout={print_stdout}",
         ]
+        if journal_info:
+            lines.append(f"[{PROG}] journal={' '.join(journal_info)}")
+        lines.append(f"[{PROG}] output_dir={config.output_dir} stdout={print_stdout}")
         for line in lines:
             click.echo(line, err=True)
         return
@@ -375,6 +393,8 @@ def run(
     order_status: str | None = None,
     unfilled: bool = False,
     filled: bool = False,
+    outcome: str | None = None,
+    notes: str | None = None,
     validate_interval: str = cfg.DEFAULT_VALIDATE_INTERVAL,
     validate_candles: int = cfg.DEFAULT_VALIDATE_CANDLES,
 ) -> RunResult:
@@ -383,6 +403,7 @@ def run(
     if candles_only and validate_setup:
         raise ConfigError("Cannot specify both --candles-only and --validate-setup.")
 
+    inferred_direction: str | None = None
     if candles_only:
         cfg.validate_interval(review_interval, flag="--review-interval")
         cfg.provider_interval(provider, review_interval)
@@ -394,7 +415,13 @@ def run(
             if ltf_interval == htf_interval:
                 htf_interval = "1d" if ltf_interval != "1d" else "1w"
 
-    inferred_direction: str | None = None
+        if direction is not None:
+            dir_clean = direction.lower().strip()
+            if dir_clean not in ("long", "short"):
+                raise ConfigError(f"Invalid direction '{direction}'; must be 'long' or 'short'.")
+            inferred_direction = dir_clean
+        elif entry is not None and tp is not None:
+            inferred_direction = "long" if Decimal(str(tp)) > Decimal(str(entry)) else "short"
     resolved_order_status: str | None = None
     if validate_setup:
         if unfilled and filled:
@@ -505,6 +532,8 @@ def run(
             sl=sl,
             direction=inferred_direction,
             order_status=resolved_order_status,
+            outcome=outcome,
+            notes=notes,
             validate_interval=validate_interval,
             validate_candles=validate_candles,
         )
@@ -609,6 +638,14 @@ def run(
             )
 
         generated_at = server_time or datetime.now(timezone.utc)
+        journal = TradeJournalSpec(
+            direction=inferred_direction or direction,
+            entry_price=Decimal(str(entry)) if entry is not None else None,
+            sl_price=Decimal(str(sl)) if sl is not None else None,
+            tp_price=Decimal(str(tp)) if tp is not None else None,
+            outcome=outcome,
+            notes=notes,
+        )
         review_text = render_review_markdown(
             symbol=config.symbol,
             interval=review_interval,
@@ -616,6 +653,7 @@ def run(
             provider_label=config.provider_label,
             generated_at=generated_at,
             price_format=config.price_format,
+            journal=journal,
         )
 
         if print_stdout:
@@ -1126,19 +1164,19 @@ def run(
     "--entry",
     type=float,
     default=None,
-    help="Planned entry price level for --validate-setup.",
+    help="Planned entry price level for --validate-setup or --review.",
 )
 @click.option(
     "--tp",
     type=float,
     default=None,
-    help="Planned take profit / DOL target price level for --validate-setup.",
+    help="Planned take profit / DOL target price level for --validate-setup or --review.",
 )
 @click.option(
     "--sl",
     type=float,
     default=None,
-    help="Planned stop loss price level for --validate-setup (optional).",
+    help="Planned stop loss price level for --validate-setup or --review (optional).",
 )
 @click.option(
     "--direction",
@@ -1148,6 +1186,22 @@ def run(
         "Planned trade direction (long or short). If omitted, automatically "
         "inferred from entry and tp."
     ),
+)
+@click.option(
+    "--outcome",
+    "--trade-result",
+    "outcome",
+    type=click.Choice(["Hit TP", "Hit SL", "BE", "Cut Manual"], case_sensitive=False),
+    default=None,
+    help="Trade outcome for post-trade review journal: 'Hit TP', 'Hit SL', 'BE', 'Cut Manual'.",
+)
+@click.option(
+    "--notes",
+    "--review-notes",
+    "notes",
+    type=str,
+    default=None,
+    help="Evaluation / journal notes for post-trade review.",
 )
 @click.option(
     "--order-status",
@@ -1245,6 +1299,8 @@ def main(
     tp: float | None,
     sl: float | None,
     direction: str | None,
+    outcome: str | None,
+    notes: str | None,
     order_status: str | None,
     unfilled: bool,
     filled: bool,
@@ -1313,6 +1369,8 @@ def main(
             tp=tp,
             sl=sl,
             direction=direction,
+            outcome=outcome,
+            notes=notes,
             order_status=order_status,
             unfilled=unfilled,
             filled=filled,

@@ -82,6 +82,41 @@ def compute_session_stats(candles: Sequence[Candle]) -> SessionStats:
     )
 
 
+@dataclass(frozen=True)
+class TradeJournalSpec:
+    """Spesifikasi jurnal trade pasca-eksekusi untuk laporan review."""
+
+    direction: str | None = None
+    entry_price: Decimal | None = None
+    sl_price: Decimal | None = None
+    tp_price: Decimal | None = None
+    outcome: str | None = None
+    notes: str | None = None
+
+    @property
+    def is_empty(self) -> bool:
+        """True jika tidak ada satu pun field jurnal yang diisi."""
+        return not any([
+            self.direction,
+            self.entry_price is not None,
+            self.sl_price is not None,
+            self.tp_price is not None,
+            self.outcome,
+            self.notes,
+        ])
+
+    @property
+    def risk_reward_ratio(self) -> Decimal | None:
+        """Kalkulasi rasio R:R terencana (planned Risk to Reward)."""
+        if self.entry_price is None or self.sl_price is None or self.tp_price is None:
+            return None
+        risk = abs(self.entry_price - self.sl_price)
+        reward = abs(self.tp_price - self.entry_price)
+        if risk == Decimal(0):
+            return None
+        return (reward / risk).quantize(Decimal("0.01"))
+
+
 def render_review_markdown(
     symbol: str,
     interval: str,
@@ -90,6 +125,7 @@ def render_review_markdown(
     provider_label: str = "Binance",
     generated_at: datetime | None = None,
     price_format: cfg.PriceFormat | None = None,
+    journal: TradeJournalSpec | None = None,
 ) -> str:
     """Render the post-trade review markdown document."""
 
@@ -117,6 +153,58 @@ def render_review_markdown(
         else "datetime(UTC),open,high,low,close,volume"
     )
 
+    # Render checklist jurnal trade
+    j = journal
+    if j and not j.is_empty:
+        dir_line = (
+            f"- [x] **Arah Posisi:** {j.direction.capitalize()}"
+            if j.direction
+            else "- [ ] **Arah Posisi:** Long / Short"
+        )
+        entry_line = (
+            f"- [x] **Level Entry:** {fmt(j.entry_price)}"
+            if j.entry_price is not None
+            else "- [ ] **Level Entry:**"
+        )
+        sl_line = (
+            f"- [x] **Stop Loss (SL):** {fmt(j.sl_price)}"
+            if j.sl_price is not None
+            else "- [ ] **Stop Loss (SL):**"
+        )
+        if j.tp_price is not None:
+            rr = j.risk_reward_ratio
+            rr_str = f" (Planned R:R 1:{rr})" if rr is not None else ""
+            tp_line = f"- [x] **Take Profit (TP):** {fmt(j.tp_price)}{rr_str}"
+        else:
+            tp_line = "- [ ] **Take Profit (TP):**"
+
+        outcome_line = (
+            f"- [x] **Hasil Akhir:** {j.outcome}"
+            if j.outcome
+            else "- [ ] **Hasil Akhir:** Hit TP / Hit SL / BE / Cut Manual"
+        )
+        if j.notes:
+            notes_lines = [
+                "- [x] **Evaluasi / Catatan:**",
+                f"  > {j.notes}",
+            ]
+        else:
+            notes_lines = [
+                "- [ ] **Evaluasi / Catatan:**",
+                "  > *Tulis evaluasi di sini (misal: reaksi harga di FVG, liquidity sweep, eksekusi, dll.)...*",
+            ]
+        journal_lines = [dir_line, entry_line, sl_line, tp_line, outcome_line, *notes_lines]
+    else:
+        journal_lines = [
+            "- [ ] **Arah Posisi:** Long / Short",
+            "- [ ] **Level Entry:**",
+            "- [ ] **Stop Loss (SL):**",
+            "- [ ] **Take Profit (TP):**",
+            "- [ ] **Hasil Akhir:** Hit TP / Hit SL / BE / Cut Manual",
+            "- [ ] **Evaluasi / Catatan:**",
+            "  > *Tulis evaluasi di sini (misal: reaksi harga di FVG, liquidity sweep, eksekusi, dll.)...*",
+        ]
+
     lines = [
         f"# Post-Trade Review: {symbol.upper()} ({interval_lbl})",
         "",
@@ -142,13 +230,7 @@ def render_review_markdown(
         "",
         "## Catatan Jurnal & Evaluasi Trade",
         "",
-        "- [ ] **Arah Posisi:** Long / Short",
-        "- [ ] **Level Entry:**",
-        "- [ ] **Stop Loss (SL):**",
-        "- [ ] **Take Profit (TP):**",
-        "- [ ] **Hasil Akhir:** Hit TP / Hit SL / BE / Cut Manual",
-        "- [ ] **Evaluasi / Catatan:**",
-        "  > *Tulis evaluasi di sini (misal: reaksi harga di FVG, liquidity sweep, eksekusi, dll.)...*",
+        *journal_lines,
         "",
         "---",
         "",
@@ -162,3 +244,5 @@ def render_review_markdown(
     ]
 
     return "\n".join(lines)
+
+

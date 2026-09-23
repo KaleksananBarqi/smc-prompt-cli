@@ -19,7 +19,11 @@ from click.testing import CliRunner
 from smc_prompt import cli, config as cfg
 from smc_prompt.errors import ConfigError
 from smc_prompt.output import make_output_path
-from smc_prompt.review_renderer import compute_session_stats, render_review_markdown
+from smc_prompt.review_renderer import (
+    TradeJournalSpec,
+    compute_session_stats,
+    render_review_markdown,
+)
 from tests.conftest import HTF_CSV, LTF_CSV, MTF_CSV, make_candle
 
 
@@ -196,3 +200,105 @@ def test_validate_review_candles_bounds() -> None:
         cfg.validate_review_candles(501)
 
     assert cfg.validate_review_candles(30) == 30
+
+
+def test_render_review_markdown_with_full_journal() -> None:
+    candles = [
+        make_candle(0, high="51000", low="49000", open_="50000", close="50500"),
+        make_candle(1, high="52000", low="50200", open_="50500", close="51800"),
+    ]
+    journal = TradeJournalSpec(
+        direction="long",
+        entry_price=Decimal("50200"),
+        sl_price=Decimal("49800"),
+        tp_price=Decimal("51400"),
+        outcome="Hit TP",
+        notes="Reaksi sempurna di bullish FVG 1h, liquidity sell-side tersapu sebelum rally.",
+    )
+
+    md = render_review_markdown(
+        symbol="BTCUSDT",
+        interval="1h",
+        candles=candles,
+        provider_label="Binance",
+        generated_at=datetime(2026, 9, 21, 10, 0, 0, tzinfo=timezone.utc),
+        journal=journal,
+    )
+
+    assert "- [x] **Arah Posisi:** Long" in md
+    assert "- [x] **Level Entry:** 50200.00" in md
+    assert "- [x] **Stop Loss (SL):** 49800.00" in md
+    assert "- [x] **Take Profit (TP):** 51400.00 (Planned R:R 1:3.00)" in md
+    assert "- [x] **Hasil Akhir:** Hit TP" in md
+    assert "- [x] **Evaluasi / Catatan:**" in md
+    assert "> Reaksi sempurna di bullish FVG 1h" in md
+
+
+def test_render_review_markdown_with_partial_journal() -> None:
+    candles = [
+        make_candle(0, high="51000", low="49000", open_="50000", close="50500"),
+        make_candle(1, high="52000", low="50200", open_="50500", close="51800"),
+    ]
+    journal = TradeJournalSpec(
+        direction="short",
+        outcome="Hit SL",
+    )
+
+    md = render_review_markdown(
+        symbol="BTCUSDT",
+        interval="1h",
+        candles=candles,
+        provider_label="Binance",
+        journal=journal,
+    )
+
+    assert "- [x] **Arah Posisi:** Short" in md
+    assert "- [ ] **Level Entry:**" in md
+    assert "- [ ] **Stop Loss (SL):**" in md
+    assert "- [ ] **Take Profit (TP):**" in md
+    assert "- [x] **Hasil Akhir:** Hit SL" in md
+    assert "- [ ] **Evaluasi / Catatan:**" in md
+
+
+def test_cli_review_mode_with_journal_flags(tmp_path: Path) -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        cli.main,
+        [
+            "BTCUSDT",
+            "--candles-only",
+            "--review-interval",
+            "1h",
+            "--review-candles",
+            "10",
+            "--direction",
+            "long",
+            "--entry",
+            "50200",
+            "--sl",
+            "49800",
+            "--tp",
+            "51400",
+            "--outcome",
+            "Hit TP",
+            "--notes",
+            "Reaksi FVG mantap",
+            "--input-csv",
+            str(HTF_CSV),
+            "--output-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    created_files = list(tmp_path.glob("BTCUSDT-REVIEW-*.md"))
+    assert len(created_files) == 1
+    text = created_files[0].read_text(encoding="utf-8")
+    assert "- [x] **Arah Posisi:** Long" in text
+    assert "- [x] **Level Entry:** 50200" in text
+    assert "- [x] **Stop Loss (SL):** 49800" in text
+    assert "- [x] **Take Profit (TP):** 51400" in text
+    assert "- [x] **Hasil Akhir:** Hit TP" in text
+    assert "- [x] **Evaluasi / Catatan:**" in text
+    assert "> Reaksi FVG mantap" in text
+
