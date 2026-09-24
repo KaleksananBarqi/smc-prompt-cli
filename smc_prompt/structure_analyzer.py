@@ -138,9 +138,9 @@ def compute_atr(
             f"(need >= {period + 1}, got {len(candles)})."
         )
 
-    highs = pd.Series([float(c.high) for c in candles], dtype="float64")
-    lows = pd.Series([float(c.low) for c in candles], dtype="float64")
-    closes = pd.Series([float(c.close) for c in candles], dtype="float64")
+    highs = pd.Series((float(c.high) for c in candles), dtype=float)
+    lows = pd.Series((float(c.low) for c in candles), dtype=float)
+    closes = pd.Series((float(c.close) for c in candles), dtype=float)
 
     prev_close = closes.shift(1)
     tr = pd.concat(
