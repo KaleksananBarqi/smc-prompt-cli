@@ -561,12 +561,12 @@ def test_non_goal_strings_absent(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_trade_plan_model_row_is_blank_for_llm(tmp_path: Path) -> None:
+def test_trade_plan_setup_row_is_blank_for_llm(tmp_path: Path) -> None:
     prompt = _offline_prompt(tmp_path)
 
-    # The model row lives INSIDE section 5 and is left for the LLM to fill.
+    # The setup/model row lives INSIDE section 5 and is left for the LLM to fill.
     plan = prompt.split("## 5. Trading Plan", 1)[1]
-    assert "| Model | [diisi oleh LLM" in plan
+    assert "| Setup / Model | [mis. ICT 2022 Model" in plan
     # The tool injects no model label anywhere in the prompt.
     assert "- **Model:**" not in prompt
     assert "MODEL_NAME" not in prompt

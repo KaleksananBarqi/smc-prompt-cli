@@ -35,8 +35,8 @@ LTF_CSV = FIXTURE_DIR / "ltf_hourly.csv"
 #:
 #: The 3-tier extension added the MTF data block, so the hash and byte count
 #: were regenerated from the 3-fixture offline render (HTF + MTF + LTF).
-GOLDEN_SHA256 = "9b2e783de9467a2ac33caa65f5952a3ab730947c047eedfc080c89296446440f"
-GOLDEN_BYTES = 30755
+GOLDEN_SHA256 = "1ca8eed0d35cdea9a999cdd0536c8f18c6c42d0633a44d8d0eb40c296fabfd09"
+GOLDEN_BYTES = 30796
 
 BASE_TIME = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
