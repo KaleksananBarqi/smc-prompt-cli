@@ -878,3 +878,124 @@ def test_oanda_read_display_precision_empty_instruments_loop() -> None:
         ])
     )
     assert source._read_display_precision() is None
+
+
+def test_twelvedata_sleep_and_rand_args(xau_config: cfg.Config) -> None:
+    def fake_sleep(t: float) -> None:
+        pass
+    def fake_rand() -> float:
+        return 0.5
+    source = TwelveDataSource(
+        xau_config,
+        api_key="test-key",
+        sleep=fake_sleep,
+        rand=fake_rand,
+    )
+    assert source._http._sleep == fake_sleep
+    assert source._http._rand == fake_rand
+
+def test_twelvedata_with_now_and_fetch_server_time(xau_config: cfg.Config) -> None:
+    source = TwelveDataSource(xau_config, api_key="test-key")
+    now_point = datetime(2027, 1, 1, 12, 0, tzinfo=timezone.utc)
+    new_source = source.with_now(now_point)
+    assert new_source._now() == now_point
+
+    server_time = source.fetch_server_time()
+    assert isinstance(server_time, datetime)
+    assert server_time.tzinfo == timezone.utc
+
+def test_twelvedata_fetch_klines_missing_datetime(xau_config: cfg.Config) -> None:
+    rows = [{"open": "1", "high": "2", "low": "1", "close": "1"}]
+    source = TwelveDataSource(
+        xau_config,
+        api_key="test-key",
+        session=_FakeSession(_twelvedata_routes(rows)),
+        now=lambda: _NOW,
+    )
+    from smc_prompt.errors import NetworkError
+    with pytest.raises(NetworkError, match="returned a row without a datetime"):
+        source.fetch_klines("1d", 1)
+
+def test_twelvedata_fetch_klines_invalid_datetime(xau_config: cfg.Config) -> None:
+    rows = [{"datetime": "not-a-date", "open": "1", "high": "2", "low": "1", "close": "1"}]
+    source = TwelveDataSource(
+        xau_config,
+        api_key="test-key",
+        session=_FakeSession(_twelvedata_routes(rows)),
+        now=lambda: _NOW,
+    )
+    from smc_prompt.errors import NetworkError
+    with pytest.raises(NetworkError, match="returned an unparseable datetime"):
+        source.fetch_klines("1d", 1)
+
+def test_twelvedata_validate_symbol_no_symbol(xau_config: cfg.Config) -> None:
+    routes = [("/quote", {"not_symbol": "x"})]
+    source = TwelveDataSource(
+        xau_config,
+        api_key="test-key",
+        session=_FakeSession(routes),
+        now=lambda: _NOW,
+    )
+    from smc_prompt.errors import SymbolNotFoundError
+    with pytest.raises(SymbolNotFoundError, match="is not available on Twelve Data"):
+        source.validate_symbol()
+
+def test_twelvedata_fetch_klines_invalid_payload(xau_config: cfg.Config) -> None:
+    routes = [("/time_series", "not-a-dict")]
+    source = TwelveDataSource(
+        xau_config,
+        api_key="test-key",
+        session=_FakeSession(routes),
+        now=lambda: _NOW,
+    )
+    from smc_prompt.errors import NetworkError
+    with pytest.raises(NetworkError, match="Unexpected XAU/USD 1d candles payload"):
+        source.fetch_klines("1d", 1)
+
+def test_twelvedata_fetch_klines_no_values(xau_config: cfg.Config) -> None:
+    routes = [("/time_series", {"status": "ok"})]
+    source = TwelveDataSource(
+        xau_config,
+        api_key="test-key",
+        session=_FakeSession(routes),
+        now=lambda: _NOW,
+    )
+    from smc_prompt.errors import NetworkError
+    with pytest.raises(NetworkError, match="Twelve Data returned no XAU/USD 1d candles"):
+        source.fetch_klines("1d", 1)
+
+def test_twelvedata_fetch_current_price_errors(xau_config: cfg.Config) -> None:
+    from smc_prompt.errors import NetworkError
+
+    # Missing close field
+    routes1 = [
+        ("/quote", {"symbol": "XAU/USD"}),
+        ("/time_series", {"values": [_td_row("2026-07-15 00:00:00")]})
+    ]
+    source1 = TwelveDataSource(xau_config, api_key="test", session=_FakeSession(routes1), now=lambda: _NOW)
+    assert source1.fetch_current_price() == Decimal("2405.50")
+    assert "returned no close field" in source1.price_notes[0]
+
+    # Non-positive price
+    routes2 = [
+        ("/quote", {"symbol": "XAU/USD", "close": "0"}),
+        ("/time_series", {"values": [_td_row("2026-07-15 00:00:00")]})
+    ]
+    source2 = TwelveDataSource(xau_config, api_key="test", session=_FakeSession(routes2), now=lambda: _NOW)
+    assert source2.fetch_current_price() == Decimal("2405.50")
+    assert "invalid non-positive price" in source2.price_notes[0]
+
+    # Outside band
+    routes3 = [
+        ("/quote", {"symbol": "XAU/USD", "close": "3000"}),
+        ("/time_series", {"values": [_td_row("2026-07-15 00:00:00")]})
+    ]
+    source3 = TwelveDataSource(xau_config, api_key="test", session=_FakeSession(routes3), now=lambda: _NOW)
+    from smc_prompt.models import Candle
+    ref = Candle(
+        open_time=datetime(2026, 7, 15, tzinfo=timezone.utc),
+        open=Decimal("2400"), high=Decimal("2410"), low=Decimal("2390"), close=Decimal("2405"), volume=Decimal("0"),
+        close_time=datetime(2026, 7, 16, tzinfo=timezone.utc), is_closed=True
+    )
+    assert source3.fetch_current_price(reference_candle=ref, tolerance=Decimal("1")) == Decimal("2405.50")
+    assert "outside the last closed candle range" in source3.price_notes[0]
