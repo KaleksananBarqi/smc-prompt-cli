@@ -772,27 +772,13 @@ def reference_sanity_warnings(
 # --------------------------------------------------------------------------
 
 
-def analyze(
-    candles: Sequence[Candle],
-    *,
-    timeframe: str,
-    requested: int,
-    current_price: Decimal,
-    config: cfg.Config,
-) -> tuple[TimeframeAnalysis, list[Candle], SeriesStats]:
-    """Run the full Layer-A analysis pipeline for one timeframe.
+def _detect_base_swings(
+    closed: Sequence[Candle], timeframe: str, config: cfg.Config
+) -> tuple[Decimal | None, list[SwingPoint]]:
+    """Compute ATR and detect base swings for the series.
 
-    Returns the analysis, the emitted table candles, and the series stats.
+    Raises InsufficientDataError if no swings are detected.
     """
-
-    closed, stats = prepare_series(
-        candles,
-        timeframe=timeframe,
-        requested=requested,
-        swing_lookback=config.swing_lookback,
-        atr_period=config.atr_period,
-    )
-
     # ATR is ALWAYS computed when enough history exists: it drives the
     # deterministic swing-separation filter (spec §4.2 / §7.1) and must not
     # depend on whether the user wants the ATR lines *displayed*.
@@ -815,6 +801,19 @@ def analyze(
             f"({len(closed)} closed candles). Prompt not generated."
         )
 
+    return atr, swings
+
+
+def _build_timeframe_analysis(
+    timeframe: str,
+    closed: Sequence[Candle],
+    swings: list[SwingPoint],
+    atr: Decimal | None,
+    current_price: Decimal,
+    stats: SeriesStats,
+    config: cfg.Config,
+) -> TimeframeAnalysis:
+    """Build the final TimeframeAnalysis object for the series."""
     structure = classify_structure(swings, config, atr_value=atr)
     ref_high, ref_low, dist_high, dist_low = compute_distance_metrics(
         current_price,
@@ -869,7 +868,7 @@ def analyze(
         price_format=config.price_format,
     )
 
-    analysis = TimeframeAnalysis(
+    return TimeframeAnalysis(
         timeframe=timeframe,
         structure_class=structure,
         swing_high=ref_high,
@@ -897,4 +896,38 @@ def analyze(
         ),
         volume=volume,
     )
+
+
+def analyze(
+    candles: Sequence[Candle],
+    *,
+    timeframe: str,
+    requested: int,
+    current_price: Decimal,
+    config: cfg.Config,
+) -> tuple[TimeframeAnalysis, list[Candle], SeriesStats]:
+    """Run the full Layer-A analysis pipeline for one timeframe.
+
+    Returns the analysis, the emitted table candles, and the series stats.
+    """
+    closed, stats = prepare_series(
+        candles,
+        timeframe=timeframe,
+        requested=requested,
+        swing_lookback=config.swing_lookback,
+        atr_period=config.atr_period,
+    )
+
+    atr, swings = _detect_base_swings(closed, timeframe, config)
+
+    analysis = _build_timeframe_analysis(
+        timeframe=timeframe,
+        closed=closed,
+        swings=swings,
+        atr=atr,
+        current_price=current_price,
+        stats=stats,
+        config=config,
+    )
+
     return analysis, emitted_table(closed, stats.emitted_count), stats
