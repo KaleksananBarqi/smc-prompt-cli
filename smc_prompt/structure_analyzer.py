@@ -260,14 +260,19 @@ def detect_swings(
 
     for i in range(half, len(candles) - half):
         center = candles[i]
-        window = candles[i - half : i + half + 1]
+        is_high = True
+        is_low = True
 
-        others = [c for j, c in enumerate(window) if j != half]
-        if not others:
-            continue
-
-        is_high = center.high > max(c.high for c in others)
-        is_low = center.low < min(c.low for c in others)
+        for j in range(i - half, i + half + 1):
+            if j == i:
+                continue
+            c = candles[j]
+            if is_high and c.high >= center.high:
+                is_high = False
+            if is_low and c.low <= center.low:
+                is_low = False
+            if not is_high and not is_low:
+                break
 
         if is_high:
             raw.append(
