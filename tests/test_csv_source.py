@@ -29,7 +29,12 @@ def _write_csv(path: Path, rows: list[str], header: str | None = None) -> Path:
 
 
 def _source(tmp_path: Path) -> LocalCsvSource:
-    config = cfg.build_config("TESTUSDT")
+    config = cfg.build_config(
+        "TESTUSDT",
+        htf_interval="1d",
+        mtf_interval="4h",
+        ltf_interval="1h",
+    )
     return LocalCsvSource(
         config,
         htf_file=str(HTF_CSV),

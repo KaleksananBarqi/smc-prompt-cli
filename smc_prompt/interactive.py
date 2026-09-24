@@ -8,6 +8,7 @@ be selected with a single ENTER keystroke.
 
 from __future__ import annotations
 
+import os
 import sys
 from decimal import Decimal
 from typing import Any
@@ -101,6 +102,39 @@ def run_interactive_wizard() -> None:
                 default=default_symbol,
             ).strip().upper()
         click.echo("")
+
+        # Validasi kredensial provider jika diperlukan (Twelve Data / OANDA)
+        twelvedata_key: str | None = None
+        oanda_token: str | None = None
+        oanda_account_id: str | None = None
+        oanda_env: str = cfg.OANDA_ENV_PRACTICE
+
+        if provider == cfg.PROVIDER_TWELVEDATA:
+            existing_key = os.environ.get("TWELVEDATA_API_KEY", "").strip()
+            if not existing_key:
+                click.secho(
+                    "  [!] TWELVEDATA_API_KEY tidak terdeteksi di .env maupun shell environment.",
+                    fg="yellow",
+                    bold=True,
+                )
+                twelvedata_key = click.prompt(
+                    click.style("  Masukkan Twelve Data API Key", fg="bright_white"),
+                    type=str,
+                ).strip()
+
+        elif provider == cfg.PROVIDER_OANDA:
+            existing_token = os.environ.get("OANDA_API_TOKEN", "").strip()
+            if not existing_token:
+                click.secho(
+                    "  [!] OANDA_API_TOKEN tidak terdeteksi di .env maupun shell environment.",
+                    fg="yellow",
+                    bold=True,
+                )
+                oanda_token = click.prompt(
+                    click.style("  Masukkan OANDA API Token", fg="bright_white"),
+                    type=str,
+                ).strip()
+            oanda_account_id = os.environ.get("OANDA_ACCOUNT_ID", "").strip() or None
 
         # Step 3: Mode Tindakan / Mau Ngapain
         action_options = [
@@ -301,6 +335,10 @@ def run_interactive_wizard() -> None:
             cli_parts.append(f"--provider {provider}")
         if provider == "csv":
             cli_parts.append(f"--input-csv {input_csv}")
+        if twelvedata_key:
+            cli_parts.append(f"--twelvedata-key {twelvedata_key}")
+        if oanda_token:
+            cli_parts.append(f"--oanda-token {oanda_token}")
         if action == "review":
             cli_parts.append("--candles-only")
             if review_interval != cfg.DEFAULT_REVIEW_INTERVAL:
@@ -355,6 +393,12 @@ def run_interactive_wizard() -> None:
         click.secho("  RINGKASAN PENGATURAN", fg="bright_white", bold=True)
         click.secho("=" * 70, fg="cyan", bold=True)
         click.echo(f"  * Sumber Data    : {click.style(cfg.provider_label(provider) if provider != 'csv' else 'Offline CSV', fg='bright_yellow', bold=True)}")
+        if provider == cfg.PROVIDER_TWELVEDATA:
+            key_status = "Tersedia (via .env/environment)" if not twelvedata_key else "Diberikan secara manual"
+            click.echo(f"  * Twelve Data Key: {click.style(key_status, fg='cyan')}")
+        elif provider == cfg.PROVIDER_OANDA:
+            token_status = "Tersedia (via .env/environment)" if not oanda_token else "Diberikan secara manual"
+            click.echo(f"  * Token OANDA    : {click.style(token_status, fg='cyan')}")
         click.echo(f"  * Simbol Aset    : {click.style(symbol, fg='bright_green', bold=True)}")
         action_label = "SMC/ICT Prompt Generator" if action == "prompt" else ("Review Pasca-Trade" if action == "review" else "Validasi Setup")
         click.echo(f"  * Mode Tindakan  : {click.style(action_label, fg='bright_white')}")
@@ -426,6 +470,10 @@ def run_interactive_wizard() -> None:
             base_urls=cfg.DEFAULT_BASE_URLS,
             input_csv=input_csv,
             provider=actual_provider,
+            twelvedata_key=twelvedata_key,
+            oanda_token=oanda_token,
+            oanda_account_id=oanda_account_id,
+            oanda_env=oanda_env,
             candles_only=candles_only,
             review_interval=review_interval,
             review_candles=review_candles,

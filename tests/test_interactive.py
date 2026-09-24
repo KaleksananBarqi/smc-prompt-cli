@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from click.testing import CliRunner
 
 from smc_prompt import cli, config as cfg, interactive
@@ -171,3 +172,65 @@ def test_cli_dry_run_with_bitunix() -> None:
     result = runner.invoke(cli.main, ["BTCUSDT", "--provider", "bitunix", "--dry-run"])
     assert result.exit_code == 0
     assert "provider=bitunix" in result.output
+
+
+def test_cli_loads_dotenv_before_interactive() -> None:
+    runner = CliRunner()
+    with patch("smc_prompt.interactive.run_interactive_wizard") as mock_wizard, \
+         patch("smc_prompt.cli._load_dotenv_or_warn") as mock_dotenv:
+        result = runner.invoke(cli.main, [])
+        assert result.exit_code == 0
+        mock_dotenv.assert_called_once_with(None, no_dotenv=False)
+        mock_wizard.assert_called_once()
+
+
+def test_interactive_wizard_twelvedata_with_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TWELVEDATA_API_KEY", "mock-env-key")
+    with patch("smc_prompt.cli.run") as mock_run, \
+         patch("click.prompt") as mock_prompt, \
+         patch("click.confirm") as mock_confirm:
+
+        mock_prompt.side_effect = [
+            "3",         # Provider: Twelve Data
+            "XAUUSD",    # Symbol
+            "1",         # Action: SMC/ICT prompt
+        ]
+        mock_confirm.side_effect = [
+            True,   # default timeframe
+            False,  # print stdout
+            True,   # execute run
+        ]
+
+        interactive.run_interactive_wizard()
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[0] == "XAUUSD"
+        assert kwargs["provider"] == "twelvedata"
+        assert kwargs["twelvedata_key"] is None
+
+
+def test_interactive_wizard_twelvedata_prompts_when_missing_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TWELVEDATA_API_KEY", raising=False)
+    with patch("smc_prompt.cli.run") as mock_run, \
+         patch("click.prompt") as mock_prompt, \
+         patch("click.confirm") as mock_confirm:
+
+        mock_prompt.side_effect = [
+            "3",               # Provider: Twelve Data
+            "XAUUSD",          # Symbol
+            "manual-td-key",   # Twelve Data API Key prompted manually
+            "1",               # Action: SMC/ICT prompt
+        ]
+        mock_confirm.side_effect = [
+            True,   # default timeframe
+            False,  # print stdout
+            True,   # execute run
+        ]
+
+        interactive.run_interactive_wizard()
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[0] == "XAUUSD"
+        assert kwargs["provider"] == "twelvedata"
+        assert kwargs["twelvedata_key"] == "manual-td-key"
+

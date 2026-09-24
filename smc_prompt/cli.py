@@ -1334,6 +1334,11 @@ def main(
 
     _ensure_utf8_streams()
 
+    # .env adalah convenience layer di bawah environment shell (lihat
+    # CREDENTIAL_PRECEDENCE): pemuatan dilakukan di sini sebelum run() dan wizard,
+    # agar kredensial selalu siap digunakan pada seluruh jalur eksekusi CLI.
+    _load_dotenv_or_warn(env_file, no_dotenv=no_dotenv)
+
     # If --interactive is requested or no symbol is provided (and not in dry-run mode),
     # launch the interactive wizard.
     if interactive or (symbol is None and not dry_run):
@@ -1342,11 +1347,6 @@ def main(
         return
 
     resolved_symbol = "" if symbol is None else symbol
-
-    # .env is a convenience layer UNDER the shell environment (see
-    # CREDENTIAL_PRECEDENCE): loading happens here, before run(), so the
-    # programmatic run() path and the test suite stay free of ambient files.
-    _load_dotenv_or_warn(env_file, no_dotenv=no_dotenv)
 
     base_urls = cfg.DEFAULT_BASE_URLS
     if base_url:
