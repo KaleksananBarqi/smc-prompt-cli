@@ -35,6 +35,7 @@ from .errors import ConfigError, NetworkError, SymbolNotFoundError
 from .models import Candle
 
 #: HTTP statuses that mean "this host is blocked for us" -> try the next host.
+# Constants are defined as frozenset for O(1) membership test performance while preserving immutability.
 HOST_BLOCK_STATUSES: frozenset[int] = frozenset({403, 451})
 
 #: HTTP statuses that mean the request itself is invalid -> no retry.
