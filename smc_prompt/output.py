@@ -56,13 +56,16 @@ def make_output_path(
     ``EURUSD-VALIDATION-2026-09-14-06-06-32-UTC.md``.
     """
 
+    # Sanitize the symbol to prevent path traversal
+    safe_symbol = symbol.replace("/", "_").replace("\\", "_")
+
     stamp = cfg.fmt_output_stamp_hyphen(moment)
     if is_validation:
-        prefix = f"{symbol.upper()}-VALIDATION"
+        prefix = f"{safe_symbol.upper()}-VALIDATION"
     elif is_review:
-        prefix = f"{symbol.upper()}-REVIEW"
+        prefix = f"{safe_symbol.upper()}-REVIEW"
     else:
-        prefix = symbol.upper()
+        prefix = safe_symbol.upper()
     return Path(output_dir) / f"{prefix}-{stamp}.md"
 
 

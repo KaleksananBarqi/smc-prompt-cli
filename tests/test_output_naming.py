@@ -37,6 +37,17 @@ def test_make_output_path_symbol_is_upper_cased() -> None:
     assert path.name == "EURUSD-2026-09-14-06-06-32-UTC.md"
 
 
+def test_make_output_path_sanitizes_symbol_path_traversal() -> None:
+    moment = datetime(2026, 9, 14, 6, 6, 32, tzinfo=timezone.utc)
+
+    path_fwd = make_output_path("../../etc/passwd", "out", moment)
+    assert path_fwd.name == ".._.._ETC_PASSWD-2026-09-14-06-06-32-UTC.md"
+    assert ".." not in path_fwd.parent.parts  # Ensure it doesn't traverse up
+
+    path_bwd = make_output_path("..\\..\\windows\\system32", "out", moment)
+    assert path_bwd.name == ".._.._WINDOWS_SYSTEM32-2026-09-14-06-06-32-UTC.md"
+
+
 def test_make_output_path_normalizes_non_utc_offset() -> None:
     """A ``+07:00`` instant stamps the SAME UTC wall clock as its UTC twin."""
 
