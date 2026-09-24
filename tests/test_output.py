@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from smc_prompt.errors import ClipboardUnavailable
-from smc_prompt.output import copy_to_clipboard, deliver
+from smc_prompt.errors import ClipboardUnavailable, OutputError
+from smc_prompt.output import copy_to_clipboard, deliver, write_output_file
 
 
 def test_copy_to_clipboard_success() -> None:
@@ -46,3 +47,33 @@ def test_deliver_clipboard_fallback(mock_copy, mock_write) -> None:
 
     assert result.copied_to_clipboard is False
     assert result.clipboard_error == "xclip not found"
+
+
+def test_write_output_file_success(tmp_path: Path) -> None:
+    path = tmp_path / "sub" / "out.md"
+    text = "Hello world\n"
+
+    returned_path = write_output_file(path, text)
+
+    assert returned_path == path
+    assert path.read_text(encoding="utf-8") == "Hello world\n"
+
+
+def test_write_output_file_mkdir_raises_oserror(tmp_path: Path) -> None:
+    path = tmp_path / "out.md"
+
+    with patch("pathlib.Path.mkdir", side_effect=OSError("mkdir failed")):
+        with pytest.raises(OutputError) as exc_info:
+            write_output_file(path, "text")
+
+    assert f"Could not write prompt to {path} (mkdir failed)." in str(exc_info.value)
+
+
+def test_write_output_file_open_raises_oserror(tmp_path: Path) -> None:
+    path = tmp_path / "out.md"
+
+    with patch("builtins.open", side_effect=OSError("open failed")):
+        with pytest.raises(OutputError) as exc_info:
+            write_output_file(path, "text")
+
+    assert f"Could not write prompt to {path} (open failed)." in str(exc_info.value)
