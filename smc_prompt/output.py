@@ -90,7 +90,7 @@ def write_output_file(path: Path, text: str) -> Path:
             handle.write(text)
     except OSError as exc:
         raise OutputError(
-            f"Could not write prompt to {path} ({exc})."
+            f"Could not write prompt to {path}."
         ) from exc
     return path
 
