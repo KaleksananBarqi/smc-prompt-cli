@@ -329,7 +329,7 @@ def render_review_markdown(
         # Blok panduan evaluasi AI — aktif hanya jika ada data numerik yang presisi
         if j.entry_price is not None or j.exit_price is not None:
             ai_guide_lines = _build_ai_guide(j, fmt)
-            journal_lines += ["", "---", ""] + ai_guide_lines
+            journal_lines.extend(["", "---", "", *ai_guide_lines])
     else:
         journal_lines = [
             "- [ ] **Arah Posisi:** Long / Short",
