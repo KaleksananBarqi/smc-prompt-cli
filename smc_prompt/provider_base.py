@@ -142,12 +142,12 @@ def aggregate_candles(
             Candle(
                 open_time=group[0].open_time,
                 open=group[0].open,
-                high=max(candle.high for candle in group),
-                low=min(candle.low for candle in group),
+                high=max([candle.high for candle in group]),
+                low=min([candle.low for candle in group]),
                 close=group[-1].close,
-                volume=sum((candle.volume for candle in group), Decimal("0")),
+                volume=sum([candle.volume for candle in group], Decimal("0")),
                 close_time=group[-1].close_time,
-                is_closed=all(candle.is_closed for candle in group),
+                is_closed=all([candle.is_closed for candle in group]),
             )
         )
     return aggregated
