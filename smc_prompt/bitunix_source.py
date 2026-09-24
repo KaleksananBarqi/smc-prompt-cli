@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Sequence
 
 import requests
