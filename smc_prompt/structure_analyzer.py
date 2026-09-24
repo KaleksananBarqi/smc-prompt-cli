@@ -238,26 +238,8 @@ def enforce_alternation(swings: Sequence[SwingPoint]) -> list[SwingPoint]:
     return result
 
 
-def detect_swings(
-    candles: Sequence[Candle],
-    *,
-    n: int = cfg.DEFAULT_SWING_LOOKBACK,
-    atr_value: Decimal | None = None,
-    merge_mult: Decimal = cfg.DEFAULT_SWING_MERGE_ATR_MULT,
-) -> list[SwingPoint]:
-    """Detect fractal swings and apply the deterministic ATR separation filter.
-
-    The ATR filter is followed by :func:`enforce_alternation`, so the returned
-    sequence is always a genuine alternating H/L/H/L skeleton. That skeleton is
-    what classification, reference selection and the rendered swing table consume.
-    """
-
-    if n % 2 == 0 or n < 3:
-        raise ValueError("fractal window n must be an odd integer >= 3")
-
-    half = (n - 1) // 2
+def _extract_raw_swings(candles: Sequence[Candle], half: int) -> list[SwingPoint]:
     raw: list[SwingPoint] = []
-
     for i in range(half, len(candles) - half):
         center = candles[i]
         window = candles[i - half : i + half + 1]
@@ -277,11 +259,10 @@ def detect_swings(
             raw.append(
                 SwingPoint(i, center.open_time, center.low, SwingType.LOW)
             )
+    return raw
 
-    if atr_value is None:
-        return raw
 
-    threshold = merge_mult * atr_value
+def _filter_by_atr(raw: list[SwingPoint], threshold: Decimal) -> list[SwingPoint]:
     filtered: list[SwingPoint] = []
     for swing in raw:
         last_same_index: int | None = None
@@ -302,6 +283,34 @@ def detect_swings(
             # else: keep the prior, more significant swing
         else:
             filtered.append(swing)
+    return filtered
+
+
+def detect_swings(
+    candles: Sequence[Candle],
+    *,
+    n: int = cfg.DEFAULT_SWING_LOOKBACK,
+    atr_value: Decimal | None = None,
+    merge_mult: Decimal = cfg.DEFAULT_SWING_MERGE_ATR_MULT,
+) -> list[SwingPoint]:
+    """Detect fractal swings and apply the deterministic ATR separation filter.
+
+    The ATR filter is followed by :func:`enforce_alternation`, so the returned
+    sequence is always a genuine alternating H/L/H/L skeleton. That skeleton is
+    what classification, reference selection and the rendered swing table consume.
+    """
+
+    if n % 2 == 0 or n < 3:
+        raise ValueError("fractal window n must be an odd integer >= 3")
+
+    half = (n - 1) // 2
+    raw = _extract_raw_swings(candles, half)
+
+    if atr_value is None:
+        return raw
+
+    threshold = merge_mult * atr_value
+    filtered = _filter_by_atr(raw, threshold)
 
     # Final deterministic cleanup: never leak consecutive same-type swings.
     return enforce_alternation(filtered)
