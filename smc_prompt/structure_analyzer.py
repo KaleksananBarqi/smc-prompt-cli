@@ -190,7 +190,7 @@ def compute_relative_volume(
     if not window:
         return None
 
-    total = sum((candle.volume for candle in window), Decimal("0"))
+    total = sum([candle.volume for candle in window], Decimal("0"))
     mean = total / Decimal(len(window))
     last = window[-1].volume
 
