@@ -1284,53 +1284,17 @@ def run(
 )
 @click.option("--debug", is_flag=True, default=False, help="Print stack traces.")
 @click.version_option(version=__version__, prog_name=PROG)
-def main(
-    symbol: str | None,
-    interactive: bool,
-    htf_candles: int,
-    mtf_candles: int,
-    ltf_candles: int,
-    htf_interval: str,
-    mtf_interval: str,
-    ltf_interval: str,
-    swing_lookback: int,
-    distance_reference: str,
-    no_atr: bool,
-    base_url: str | None,
-    output_dir: str,
-    print_stdout: bool,
-    input_csv: str | None,
-    htf_file: str | None,
-    mtf_file: str | None,
-    ltf_file: str | None,
-    max_prompt_bytes: int | None,
-    dry_run: bool,
-    provider: str,
-    twelvedata_key: str | None,
-    oanda_token: str | None,
-    oanda_account_id: str | None,
-    oanda_env: str,
-    candles_only: bool,
-    review_interval: str,
-    review_candles: int,
-    validate_setup: bool,
-    entry: float | None,
-    tp: float | None,
-    sl: float | None,
-    direction: str | None,
-    outcome: str | None,
-    notes: str | None,
-    exit_price: float | None,
-    order_status: str | None,
-    unfilled: bool,
-    filled: bool,
-    validate_interval: str,
-    validate_candles: int,
-    env_file: str | None,
-    no_dotenv: bool,
-    debug: bool,
-) -> None:
+def main(**kwargs) -> None:
     """CLI entrypoint. Parses args, then delegates to :func:`run` or :func:`run_interactive_wizard`."""
+
+    env_file = kwargs.pop("env_file", None)
+    no_dotenv = kwargs.pop("no_dotenv", False)
+    symbol = kwargs.pop("symbol", None)
+    interactive = kwargs.pop("interactive", False)
+    dry_run = kwargs.get("dry_run", False)
+    base_url = kwargs.pop("base_url", None)
+    no_atr = kwargs.pop("no_atr", False)
+    debug = kwargs.pop("debug", False)
 
     _ensure_utf8_streams()
 
@@ -1355,49 +1319,11 @@ def main(
         )
         base_urls = (base_url,) + remainder
 
+    kwargs["base_urls"] = base_urls
+    kwargs["include_atr"] = not no_atr
+
     try:
-        run(
-            resolved_symbol,
-            htf_candles=htf_candles,
-            mtf_candles=mtf_candles,
-            ltf_candles=ltf_candles,
-            htf_interval=htf_interval,
-            mtf_interval=mtf_interval,
-            ltf_interval=ltf_interval,
-            swing_lookback=swing_lookback,
-            distance_reference=distance_reference,
-            include_atr=not no_atr,
-            output_dir=output_dir,
-            print_stdout=print_stdout,
-            base_urls=base_urls,
-            input_csv=input_csv,
-            htf_file=htf_file,
-            mtf_file=mtf_file,
-            ltf_file=ltf_file,
-            max_prompt_bytes=max_prompt_bytes,
-            dry_run=dry_run,
-            provider=provider,
-            twelvedata_key=twelvedata_key,
-            oanda_token=oanda_token,
-            oanda_account_id=oanda_account_id,
-            oanda_env=oanda_env,
-            candles_only=candles_only,
-            review_interval=review_interval,
-            review_candles=review_candles,
-            validate_setup=validate_setup,
-            entry=entry,
-            tp=tp,
-            sl=sl,
-            direction=direction,
-            outcome=outcome,
-            notes=notes,
-            exit_price=exit_price,
-            order_status=order_status,
-            unfilled=unfilled,
-            filled=filled,
-            validate_interval=validate_interval,
-            validate_candles=validate_candles,
-        )
+        run(resolved_symbol, **kwargs)
     except SmcPromptError as exc:
         _error(str(exc))
         if debug:
