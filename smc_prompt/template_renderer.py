@@ -15,7 +15,6 @@ from decimal import Decimal
 from datetime import datetime
 from functools import lru_cache
 from importlib import resources
-from pathlib import Path
 from typing import Sequence
 
 from jinja2 import Environment, StrictUndefined, TemplateError
