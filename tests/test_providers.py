@@ -399,6 +399,33 @@ def test_oanda_current_price_is_bid_ask_midpoint() -> None:
     assert price == Decimal("2405")
 
 
+def test_oanda_current_price_error_branch_fallback() -> None:
+    config = cfg.build_config("XAUUSD", provider=cfg.PROVIDER_OANDA)
+    rows = [
+        _oanda_row("2026-07-15T00:00:00.000000000Z", complete=True),
+        _oanda_row("2026-07-16T00:00:00.000000000Z", complete=False),
+    ]
+    routes: list[tuple[str, object]] = [
+        ("/candles", {"candles": rows}),
+        ("/pricing", {"prices": []}),
+        ("/v3/accounts", {"accounts": [{"id": "101-001-1234567-001"}]}),
+    ]
+    source = OandaSource(
+        config,
+        token="test-token",
+        session=_FakeSession(routes),
+        now=lambda: _NOW,
+    )
+
+    price = source.fetch_current_price()
+
+    assert price == Decimal("2405.500")
+    notes = source.price_notes
+    assert len(notes) == 1
+    assert "Ticker price rejected" in notes[0]
+    assert "OANDA pricing returned no price entry" in notes[0]
+
+
 def test_oanda_requires_token() -> None:
     config = cfg.build_config("XAUUSD", provider=cfg.PROVIDER_OANDA)
     with pytest.raises(ConfigError):
