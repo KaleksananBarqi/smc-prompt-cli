@@ -26,6 +26,8 @@ from smc_prompt.provider_base import (
 )
 from smc_prompt.structure_analyzer import compute_relative_volume
 from smc_prompt.twelvedata_source import TwelveDataSource
+from smc_prompt.models import Candle
+from smc_prompt.errors import NetworkError, SymbolNotFoundError
 
 from .conftest import HTF_CSV, LTF_CSV, MTF_CSV, make_candle
 
@@ -521,3 +523,358 @@ def test_offline_run_hides_delisted_warning_when_volume_unavailable(
         provider=cfg.PROVIDER_OANDA,
     )
     assert not any("delisted" in warning for warning in result.warnings)
+
+def test_oanda_init_kwargs() -> None:
+    config = cfg.build_config("XAUUSD", provider=cfg.PROVIDER_OANDA)
+    sleep_called = False
+    rand_called = False
+    def my_sleep(s): nonlocal sleep_called; sleep_called = True
+    def my_rand(): nonlocal rand_called; rand_called = True; return 0.5
+
+    source = OandaSource(config, token="test", sleep=my_sleep, rand=my_rand)
+    # The HTTP client should use the provided functions
+    source._http._sleep(0.1)
+    source._http._rand()
+    assert sleep_called
+    assert rand_called
+
+def test_oanda_price_notes() -> None:
+    config = cfg.build_config("XAUUSD", provider=cfg.PROVIDER_OANDA)
+    source = _oanda_source(config, [])
+    assert source.price_notes == ()
+    source._price_notes.append("test note")
+    assert source.price_notes == ("test note",)
+
+def test_oanda_with_now() -> None:
+    config = cfg.build_config("XAUUSD", provider=cfg.PROVIDER_OANDA)
+    source = _oanda_source(config, [])
+    source._display_precision = 4
+    moment = datetime(2027, 1, 1, tzinfo=timezone.utc)
+    clone = source.with_now(moment)
+    assert clone._now() == moment
+    assert clone._display_precision == 4
+
+def test_oanda_server_time() -> None:
+    config = cfg.build_config("XAUUSD", provider=cfg.PROVIDER_OANDA)
+    source = OandaSource(config, token="test")
+    # Returns datetime.now(timezone.utc)
+    t = source.fetch_server_time()
+    assert t.tzinfo == timezone.utc
+
+def test_oanda_resolve_account_id_errors() -> None:
+    config = cfg.build_config("XAUUSD", provider=cfg.PROVIDER_OANDA)
+
+    # NetworkError
+    source1 = OandaSource(
+        config, token="test",
+        session=_FakeSession([("/v3/accounts", NetworkError("fail"))])
+    )
+    assert source1._resolve_account_id() is None
+
+    # Missing/invalid accounts
+    source2 = OandaSource(
+        config, token="test",
+        session=_FakeSession([("/v3/accounts", {})])
+    )
+    assert source2._resolve_account_id() is None
+
+    # Invalid accounts list
+    source3 = OandaSource(
+        config, token="test",
+        session=_FakeSession([("/v3/accounts", {"accounts": [123]})])
+    )
+    assert source3._resolve_account_id() is None
+
+    # Account missing ID
+    source4 = OandaSource(
+        config, token="test",
+        session=_FakeSession([("/v3/accounts", {"accounts": [{"no_id": True}]})])
+    )
+    assert source4._resolve_account_id() is None
+
+    # Valid but cached later
+    source5 = OandaSource(
+        config, token="test",
+        session=_FakeSession([("/v3/accounts", {"accounts": [{"id": "acc-1"}]})])
+    )
+    assert source5._resolve_account_id() == "acc-1"
+    assert source5._resolve_account_id() == "acc-1"  # Hit cache
+
+def test_oanda_read_display_precision_errors() -> None:
+    config = cfg.build_config("XAUUSD", provider=cfg.PROVIDER_OANDA)
+
+    # account_id is None -> None
+    source1 = OandaSource(
+        config, token="test",
+        session=_FakeSession([("/v3/accounts", NetworkError("fail"))])
+    )
+    assert source1._read_display_precision() is None
+
+    # Network error on instruments
+    source2 = OandaSource(
+        config, token="test",
+        session=_FakeSession([
+            ("/v3/accounts/acc-1/instruments", NetworkError("fail")),
+            ("/v3/accounts", {"accounts": [{"id": "acc-1"}]})
+        ])
+    )
+    assert source2._read_display_precision() is None
+
+    # Missing instruments
+    source3 = OandaSource(
+        config, token="test",
+        session=_FakeSession([
+            ("/v3/accounts/acc-1/instruments", {}),
+            ("/v3/accounts", {"accounts": [{"id": "acc-1"}]})
+        ])
+    )
+    assert source3._read_display_precision() is None
+
+    # Invalid instrument entry, bad name, invalid precision
+    source4 = OandaSource(
+        config, token="test",
+        session=_FakeSession([
+            ("/v3/accounts/acc-1/instruments", {"instruments": [
+                123,
+                {"name": "OTHER"},
+                {"name": "XAU_USD", "displayPrecision": "invalid"},
+            ]}),
+            ("/v3/accounts", {"accounts": [{"id": "acc-1"}]})
+        ])
+    )
+    assert source4._read_display_precision() is None
+
+    # Invalid precision type that raises ValueError/TypeError inside int()
+    source5 = OandaSource(
+        config, token="test",
+        session=_FakeSession([
+            ("/v3/accounts/acc-1/instruments", {"instruments": [
+                {"name": "XAU_USD", "displayPrecision": None},
+            ]}),
+            ("/v3/accounts", {"accounts": [{"id": "acc-1"}]})
+        ])
+    )
+    assert source5._read_display_precision() is None
+
+    # Out of bounds precision
+    source6 = OandaSource(
+        config, token="test",
+        session=_FakeSession([
+            ("/v3/accounts/acc-1/instruments", {"instruments": [
+                {"name": "XAU_USD", "displayPrecision": 99},
+            ]}),
+            ("/v3/accounts", {"accounts": [{"id": "acc-1"}]})
+        ])
+    )
+    assert source6._read_display_precision() is None
+
+    # Success, verify caching
+    source7 = OandaSource(
+        config, token="test",
+        session=_FakeSession([
+            ("/v3/accounts/acc-1/instruments", {"instruments": [
+                {"name": "XAU_USD", "displayPrecision": 4},
+            ]}),
+            ("/v3/accounts", {"accounts": [{"id": "acc-1"}]})
+        ])
+    )
+    assert source7._read_display_precision() == 4
+    assert source7._read_display_precision() == 4  # Hits cache
+
+
+def test_oanda_candle_from_row_errors() -> None:
+    config = cfg.build_config("XAUUSD", provider=cfg.PROVIDER_OANDA)
+    source = _oanda_source(config, [])
+
+    # Missing price data
+    with pytest.raises(NetworkError, match="without price data"):
+        source._candle_from_row({}, canonical_interval="1d", context="test")
+
+    # Missing time
+    with pytest.raises(NetworkError, match="without a time"):
+        source._candle_from_row({"mid": {"o": "1", "h": "1", "l": "1", "c": "1"}}, canonical_interval="1d", context="test")
+
+    # Unparseable time
+    with pytest.raises(NetworkError, match="unparseable time"):
+        source._candle_from_row({
+            "mid": {"o": "1", "h": "1", "l": "1", "c": "1"},
+            "time": "invalid_time"
+        }, canonical_interval="1d", context="test")
+
+def test_oanda_candle_from_row_fallback_closure() -> None:
+    config = cfg.build_config("XAUUSD", provider=cfg.PROVIDER_OANDA)
+    now_moment = datetime(2026, 7, 16, 0, 0, 0, tzinfo=timezone.utc)
+    source = OandaSource(config, token="test", now=lambda: now_moment)
+
+    # Not using 'complete' field boolean, fall back to comparing with host clock
+    row = {
+        "mid": {"o": "1", "h": "1", "l": "1", "c": "1"},
+        "time": "2026-07-15T00:00:00.000000000Z",
+        "complete": "not_a_bool"
+    }
+    # For "1d", close_time is 2026-07-16 00:00:00
+    # Host clock is exactly 2026-07-16 00:00:00.
+    # The condition is is_closed = self._now() >= close_time + timedelta(seconds=1)
+    # 2026-07-16 00:00:00 is not >= 2026-07-16 00:00:01, so is_closed is False
+    candle = source._candle_from_row(row, canonical_interval="1d", context="test")
+    assert candle.is_closed is False
+
+    # Move time slightly past close_time + 1s
+    source2 = OandaSource(
+        config, token="test",
+        now=lambda: datetime(2026, 7, 16, 0, 0, 1, tzinfo=timezone.utc)
+    )
+    candle2 = source2._candle_from_row(row, canonical_interval="1d", context="test")
+    assert candle2.is_closed is True
+
+
+def test_oanda_validate_symbol_not_found() -> None:
+    config = cfg.build_config("XAUUSD", provider=cfg.PROVIDER_OANDA)
+    source = OandaSource(
+        config, token="test",
+        session=_FakeSession([
+            ("/v3/instruments/XAU_USD/candles", {"candles": []})
+        ])
+    )
+    with pytest.raises(SymbolNotFoundError, match="is not available on OANDA"):
+        source.validate_symbol()
+
+def test_oanda_fetch_klines_errors() -> None:
+    config = cfg.build_config("XAUUSD", provider=cfg.PROVIDER_OANDA)
+
+    # Unexpected payload (not a dict)
+    source1 = OandaSource(
+        config, token="test",
+        session=_FakeSession([
+            ("/v3/instruments/XAU_USD/candles", ["not_a_dict"])
+        ])
+    )
+    with pytest.raises(NetworkError, match="Unexpected"):
+        source1.fetch_klines("1d", 10)
+
+    # Missing/empty candles array
+    source2 = OandaSource(
+        config, token="test",
+        session=_FakeSession([
+            ("/v3/instruments/XAU_USD/candles", {"candles": []})
+        ])
+    )
+    with pytest.raises(NetworkError, match="returned no"):
+        source2.fetch_klines("1d", 10)
+
+def test_oanda_first_price_and_midpoint_edge_cases() -> None:
+    config = cfg.build_config("XAUUSD", provider=cfg.PROVIDER_OANDA)
+    source = _oanda_source(config, [])
+
+    # _first_price logic
+    assert source._first_price(None) is None
+    assert source._first_price([123]) is None  # item not dict
+    assert source._first_price([{"no_price": True}]) is None
+    assert source._first_price([{"price": "123.45"}]) == Decimal("123.45")
+
+    # _midpoint logic
+    with pytest.raises(NetworkError, match="returned no usable side"):
+        source._midpoint(None, None)
+
+    assert source._midpoint(Decimal("10"), None) == Decimal("10")
+    assert source._midpoint(None, Decimal("20")) == Decimal("20")
+    assert source._midpoint(Decimal("10"), Decimal("20")) == Decimal("15")
+
+def test_oanda_fetch_current_price_errors_and_fallback() -> None:
+    config = cfg.build_config("XAUUSD", provider=cfg.PROVIDER_OANDA)
+
+    # We need a fallback candles route to test fallback properly.
+    def make_fallback_routes(pricing_payload, acc_id_payload=None):
+        if acc_id_payload is None:
+            acc_id_payload = {"accounts": [{"id": "acc-1"}]}
+        return [
+            ("/v3/instruments/XAU_USD/candles", {"candles": [
+                _oanda_row("2026-07-15T00:00:00Z")
+            ]}),
+            ("/pricing", pricing_payload),
+            ("/v3/accounts", acc_id_payload)
+        ]
+
+    # No account id available
+    source1 = OandaSource(
+        config, token="test",
+        session=_FakeSession(make_fallback_routes({"prices": []}, NetworkError("fail")))
+    )
+    assert source1.fetch_current_price() == Decimal("2405.500")
+    assert "cannot query /pricing" in source1.price_notes[0]
+
+    # Empty prices array
+    source2 = OandaSource(
+        config, token="test",
+        session=_FakeSession(make_fallback_routes({"prices": []}))
+    )
+    assert source2.fetch_current_price() == Decimal("2405.500")
+    assert "returned no price entry" in source2.price_notes[0]
+
+    # Using closeoutBid / closeoutAsk when bids/asks missing
+    source3 = OandaSource(
+        config, token="test",
+        session=_FakeSession(make_fallback_routes({
+            "prices": [{
+                "closeoutBid": "2000",
+                "closeoutAsk": "2010"
+            }]
+        }))
+    )
+    # closeout midpoint is 2005
+    # Band check: ref candle not passed, so tolerance is None -> returns True
+    assert source3.fetch_current_price() == Decimal("2005")
+
+    # Both sets missing
+    source4 = OandaSource(
+        config, token="test",
+        session=_FakeSession(make_fallback_routes({
+            "prices": [{}]
+        }))
+    )
+    assert source4.fetch_current_price() == Decimal("2405.500")
+    assert "returned neither bid nor ask" in source4.price_notes[0]
+
+    # Negative price logic
+    source5 = OandaSource(
+        config, token="test",
+        session=_FakeSession(make_fallback_routes({
+            "prices": [{
+                "closeoutBid": "-10",
+                "closeoutAsk": "0"
+            }]
+        }))
+    )
+    assert source5.fetch_current_price() == Decimal("2405.500")
+    assert "invalid non-positive price (-5)" in source5.price_notes[0]
+
+    # Out of band logic
+    source6 = OandaSource(
+        config, token="test",
+        session=_FakeSession(make_fallback_routes({
+            "prices": [{"bids": [{"price": "5000"}], "asks": [{"price": "5000"}]}]
+        }))
+    )
+    ref_candle = Candle(
+        open_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        open=Decimal("100"), high=Decimal("110"), low=Decimal("90"), close=Decimal("100"),
+        volume=Decimal("1"), close_time=datetime(2026, 1, 2, tzinfo=timezone.utc), is_closed=True
+    )
+    assert source6.fetch_current_price(reference_candle=ref_candle, tolerance=Decimal("10")) == Decimal("2405.500")
+    assert "outside the last closed candle range" in source6.price_notes[0]
+
+
+def test_oanda_read_display_precision_empty_instruments_loop() -> None:
+    config = cfg.build_config("XAUUSD", provider=cfg.PROVIDER_OANDA)
+    # Instruments list has items, but none of them match the requested instrument
+    source = OandaSource(
+        config, token="test",
+        session=_FakeSession([
+            ("/v3/accounts/acc-1/instruments", {"instruments": [
+                {"name": "NOT_XAU_USD", "displayPrecision": 4},
+                {"name": "ALSO_NOT", "displayPrecision": 3},
+            ]}),
+            ("/v3/accounts", {"accounts": [{"id": "acc-1"}]})
+        ])
+    )
+    assert source._read_display_precision() is None
