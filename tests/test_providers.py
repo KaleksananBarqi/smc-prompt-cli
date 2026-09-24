@@ -16,7 +16,7 @@ import pytest
 
 from smc_prompt import cli
 from smc_prompt import config as cfg
-from smc_prompt.errors import ConfigError
+from smc_prompt.errors import ConfigError, NetworkError
 from smc_prompt.oanda_source import OandaSource
 from smc_prompt.provider_base import (
     aggregate_candles,
@@ -409,6 +409,16 @@ def test_oanda_rejects_unknown_environment() -> None:
     config = cfg.build_config("XAUUSD", provider=cfg.PROVIDER_OANDA)
     with pytest.raises(ConfigError):
         OandaSource(config, token="t", environment="staging")
+
+
+def test_oanda_missing_time_key_raises_network_error() -> None:
+    config = cfg.build_config("XAUUSD", provider=cfg.PROVIDER_OANDA)
+
+    row = _oanda_row("2026-07-15T00:00:00.000000000Z")
+    del row["time"]
+
+    with pytest.raises(NetworkError, match="returned a candle without a time"):
+        _oanda_source(config, [row]).fetch_klines("1d", 1)
 
 
 # --------------------------------------------------------------------------
