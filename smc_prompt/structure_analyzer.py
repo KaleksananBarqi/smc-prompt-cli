@@ -283,15 +283,20 @@ def detect_swings(
 
     threshold = merge_mult * atr_value
     filtered: list[SwingPoint] = []
+    last_high_idx: int | None = None
+    last_low_idx: int | None = None
+
     for swing in raw:
-        last_same_index: int | None = None
-        for idx in range(len(filtered) - 1, -1, -1):
-            if filtered[idx].type is swing.type:
-                last_same_index = idx
-                break
+        last_same_index = (
+            last_high_idx if swing.type is SwingType.HIGH else last_low_idx
+        )
 
         if last_same_index is None:
             filtered.append(swing)
+            if swing.type is SwingType.HIGH:
+                last_high_idx = len(filtered) - 1
+            else:
+                last_low_idx = len(filtered) - 1
             continue
 
         last_same = filtered[last_same_index]
@@ -299,9 +304,21 @@ def detect_swings(
             if swing.is_more_extreme_than(last_same):
                 filtered.pop(last_same_index)
                 filtered.append(swing)
+                if swing.type is SwingType.HIGH:
+                    last_high_idx = len(filtered) - 1
+                    if last_low_idx is not None and last_low_idx > last_same_index:
+                        last_low_idx -= 1
+                else:
+                    last_low_idx = len(filtered) - 1
+                    if last_high_idx is not None and last_high_idx > last_same_index:
+                        last_high_idx -= 1
             # else: keep the prior, more significant swing
         else:
             filtered.append(swing)
+            if swing.type is SwingType.HIGH:
+                last_high_idx = len(filtered) - 1
+            else:
+                last_low_idx = len(filtered) - 1
 
     # Final deterministic cleanup: never leak consecutive same-type swings.
     return enforce_alternation(filtered)
