@@ -16,6 +16,7 @@ dist/
 venv/
 env/
 ENV/
+.venv
 
 # Testing / tooling caches
 .pytest_cache/
