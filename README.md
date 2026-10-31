@@ -45,26 +45,26 @@ tinggal menjalankan satu perintah lalu menempelkan hasilnya ke LLM mana pun.
 
 ## Fitur Utama
 
+- **Optimasi & Kompresi Token Output Prompt:** Output prompt dirancang hemat token (~3.000–4.000 token, terpangkas >65% dari prompt lama yang mencapai ~13.000 token) tanpa mengurangi akurasi indikator Layer-A. Slicing candle mentah default menggunakan *Render Tail* (HTF 20, MTF 30, LTF 40 candle terakhir), volume integer rounding, compact timestamp (`MM-DD` / `MM-DD HH:MM`), label singkat (`SH`/`SL`, `BULL`/`BEAR`), dan deduplikasi referensi level. Tersedia flag `--full-candles` jika membutuhkan seluruh baris histori candle.
 - **Dua lapisan payload** yang disuntikkan ke prompt:
   - **Layer A — Computed Summary:** harga saat ini, swing high/low terdeteksi
-    (harga + timestamp), **sequence swing berlabel** (HH/HL/LH/LL/EQH/EQL),
+    (harga + timestamp), **sequence swing berlabel** (HH/HL/LH/LL/EQH/EQL) lengkap dengan **status likuiditas 5 level** (`untested`, `wick_sweep`, `reclaim_sweep`, `pending_break`, `broken`),
     klasifikasi struktur mekanis, **equal highs/lows (liquidity pool)**,
-    **Fair Value Gap (FVG) mekanis** (3-candle, lengkap dengan status
-    `filled`/`unfilled`), **tiga jenis referensi level** (recent / nearest /
-    window-extreme) lengkap dengan status `swept`/`untested`, metrik jarak, dan
+    **Fair Value Gap (FVG) mekanis** (3-candle, hanya menyaring gap `unfilled` atau yang baru `filled` dalam $\le 3$ candle terakhir), **Order Block (OB) mekanis** berbasis FVG displacement lengkap dengan 50% *Mean Threshold* (`mt`) dan status mitigasi (`unmitigated`, `tapped`), **tiga jenis referensi level** (recent / nearest /
+    window-extreme) diringkas secara padat, metrik jarak, dan
     ATR(14) opsional. Jarak swing juga disajikan **ternormalisasi ATR**
     (`x{n}×ATR`), ATR(14) diringkas sebagai **persentase harga**
     (`ATR ≈ x% of price`), dan candle terakhir diberi **sinyal volume mekanis**
-    (volume relatif `last/mean(N)` dan flag spike). Lihat Phase 5 di bawah.
-  - **Layer B — Raw Candle Table:** tabel OHLCV ringkas format CSV untuk **tiga
-    timeframe native** (HTF, MTF, LTF; default `1d` / `4h` / `1h`, tiap interval
-    dapat dikonfigurasi) agar LLM dapat menurunkan sendiri Order Block dan
-    CHoCH/MSS (beberapa swing). Ketiga interval harus **berbeda (distinct)**.
-    FVG kini dihitung di Layer A sebagai fakta mekanis murni (lihat di bawah).
+    (volume relatif `last/mean(N)` dan flag spike).
+  - **Layer B — Raw Candle Table:** tabel OHLCV ringkas format CSV hemat token untuk **tiga
+    timeframe native** (HTF, MTF, LTF; default `4h` / `1h` / `15m`, tiap interval
+    dapat dikonfigurasi) agar LLM dapat membaca pola mikro secara tajam.
 - **Deteksi swing deterministik:** N-bar Williams Fractal (default `N = 5`)
   dengan post-filter pemisahan ATR dan **post-pass skeleton bergantian**
   (`enforce_alternation`) yang menjamin urutan H/L/H/L murni. Tanpa random,
   tanpa rekursi, tanpa lookahead.
+- **Deteksi Order Block (OB) Mekanis (FVG-Linked):** Mendeteksi base candle secara deterministik di pangkal impuls sebelum lahirnya FVG displacement ($\ge 0.1 \times \text{ATR}$), menghitung titik tengah 50% *Mean Threshold*, serta melacak siklus hidup mitigasi (`unmitigated`, `tapped`, `invalidated`).
+- **Diferensiasi Liquidity Sweep vs BOS:** Membedakan secara presisi antara manipulasi likuiditas (*wick sweep* 1-candle / *reclaim sweep* 2-candle stop hunt) dengan penembusan struktural (*Break of Structure* / BOS yang bertahan $\ge 2$ candle close berurutan).
 - **Klasifikasi struktur mekanis:** `Bullish` / `Bearish` / `Ranging/Mixed` /
   `Equal Highs/Lows` — murni perbandingan numerik swing terakhir, **bukan**
   "bias".
@@ -214,12 +214,13 @@ dan [`smc_prompt/config.py`](smc_prompt/config.py).
 | `SYMBOL` | positional `str` | `None` (opsional) | Simbol instrumen (mis. `BTCUSDT`, `ETHUSDT` untuk crypto; `XAUUSD` untuk FX/logam). Jika tidak diisi, otomatis meluncurkan **Terminal Interactive Mode**. |
 | `-i`, `--interactive` | flag | off | **Terminal Interactive Mode.** Menjalankan panduan interaktif ramah pengguna langkah-demi-langkah (pilih provider, ticker, aksi) dengan smart defaults untuk timeframe. |
 | `--provider` | pilihan: `binance` \| `bitunix` \| `twelvedata` \| `oanda` | `binance` | Sumber data market data. `binance` dan `bitunix` untuk crypto (USDT-M Futures); `twelvedata` dan `oanda` untuk spot FX dan logam mulia (`XAUUSD`). |
-| `--htf-interval` | interval Binance | `1d` | Interval kline Binance untuk seri HTF. Nilai valid: `1m,3m,5m,15m,30m,1h,2h,4h,6h,8h,12h,1d,3d,1w,1M`. Nilai di luar daftar ditolak dengan exit code `2`. |
-| `--mtf-interval` | interval Binance | `4h` | Interval kline Binance untuk seri MTF (medium). Daftar nilai valid sama dengan `--htf-interval`. Harus berbeda dari dua tier lainnya. |
-| `--ltf-interval` | interval Binance | `1h` | Interval kline Binance untuk seri LTF. Daftar nilai valid sama dengan `--htf-interval`. Harus berbeda dari dua tier lainnya. |
-| `--htf-candles` | `int >= 10` | `60` | Jumlah candle **HTF-interval tertutup** (closed) pada tabel mentah HTF. |
-| `--mtf-candles` | `int >= 10` | `120` | Jumlah candle **MTF-interval tertutup** (closed) pada tabel mentah MTF. |
-| `--ltf-candles` | `int >= 10` | `100` | Jumlah candle **LTF-interval tertutup** (closed) pada tabel mentah LTF. |
+| `--htf-interval` | interval Binance | `4h` | Interval kline Binance untuk seri HTF. Nilai valid: `1m,3m,5m,15m,30m,1h,2h,4h,6h,8h,12h,1d,3d,1w,1M`. Nilai di luar daftar ditolak dengan exit code `2`. |
+| `--mtf-interval` | interval Binance | `1h` | Interval kline Binance untuk seri MTF (medium). Daftar nilai valid sama dengan `--htf-interval`. Harus berbeda dari dua tier lainnya. |
+| `--ltf-interval` | interval Binance | `15m` | Interval kline Binance untuk seri LTF. Daftar nilai valid sama dengan `--htf-interval`. Harus berbeda dari dua tier lainnya. |
+| `--htf-candles` | `int >= 10` | `90` | Jumlah candle closed HTF yang diambil dari pasar untuk kalkulasi indikator/struktur Layer-A. |
+| `--mtf-candles` | `int >= 10` | `186` | Jumlah candle closed MTF yang diambil dari pasar untuk kalkulasi indikator/struktur Layer-A. |
+| `--ltf-candles` | `int >= 10` | `192` | Jumlah candle closed LTF yang diambil dari pasar untuk kalkulasi indikator/struktur Layer-A. |
+| `--full-candles` | flag | off | Merender seluruh jendela candle closed kalkulasi ke dalam prompt. Default mati: prompt merender *tail* (HTF 20, MTF 30, LTF 40 candle terakhir) untuk menghemat token secara masif. |
 | `--swing-lookback` | `int` ganjil `>= 3` | `5` | Ukuran window fractal `N` untuk deteksi swing. |
 | `--distance-reference` | pilihan: `nearest` \| `most-recent` | `nearest` | Referensi swing untuk perhitungan jarak. `nearest` = swing terdekat berdasarkan jarak harga absolut ke harga saat ini; `most-recent` = swing terbaru berdasarkan timestamp. |
 | `--no-atr` | flag | off (ATR aktif) | Menghilangkan baris ATR(14) dari prompt. Diimplementasikan lewat blok Jinja `{% if INCLUDE_ATR %}` di template (bukan pemotongan baris berbasis string). Perhitungan ATR tetap dilakukan (dipakai filter swing); hanya tampilan yang disembunyikan. |
@@ -285,17 +286,29 @@ konstanta `DEFAULT_BASE_URLS`.
 - **stdout kosong secara default**; prompt hanya dicetak ke stdout bila Anda
   memakai flag `--stdout`. Seluruh catatan, peringatan, dan error dikirim ke
   stderr.
-- Setiap baris CSV berformat: HTF `YYYY-MM-DD,O,H,L,C,V` dan LTF
-  `YYYY-MM-DD HH:MM,O,H,L,C,V` (tanpa header, tanpa kolom indeks; kolom
-  `volume` memakai `fmt_volume` = `str(Decimal)` dari nilai kline apa adanya).
-  Urutan kolom didokumentasikan lewat baris legenda di prosa
-  (`Format kolom: tanggal,open,high,low,close,volume`), bukan baris header.
-- Prompt juga memuat **tabel sequence swing** (oldest→newest, maksimum
-  `swings_table_rows = 12` baris) dengan label HH/HL/LH/LL/EQH/EQL, serta
-  **tabel FVG mekanis** per timeframe di dalam bagian §4 (oldest→newest,
-  maksimum `fvg_table_rows = 8` gap) dengan baris
-  `<stamp>,<FVG_BULLISH|FVG_BEARISH>,<lower>,<upper>,<filled|unfilled>`
-  (atau literal `NONE` bila tidak ada gap).
+- Setiap baris CSV berformat: HTF `MM-DD,O,H,L,C,V` dan MTF/LTF
+  `MM-DD HH:MM,O,H,L,C,V` (tanpa header, tanpa kolom indeks; kolom `volume`
+  dibulatkan menjadi integer deterministik). Secara default hanya merender
+  candle tail (20 HTF, 30 MTF, 40 LTF) untuk efisiensi token, atau seluruh
+  candle kalkulasi bila menggunakan flag `--full-candles`.
+- Prompt memuat **tabel sequence swing** (oldest→newest, maksimum
+  `swings_table_rows = 12` baris) berformat 5 kolom:
+  `stamp,tipe,level,label,status` (tipe `SH`/`SL`, label `HH`/`HL`/`LH`/`LL`/`EQH`/`EQL`/`-`,
+  dan status likuiditas `untested`/`wick_sweep`/`reclaim_sweep`/`pending_break`/`broken`).
+- Prompt memuat **tabel FVG mekanis (unfilled)** per timeframe (oldest→newest,
+  maksimum `fvg_table_rows = 8` gap) dengan baris:
+  `stamp,tipe,lower,upper,status` (tipe `BULL`/`BEAR`, menyaring hanya gap `unfilled`
+  atau gap `filled` yang baru tertembus dalam $\le 3$ candle terakhir).
+- Prompt memuat **tabel Order Block Aktif** per timeframe (oldest→newest,
+  maksimum `ob_table_rows = 5` baris) dengan baris:
+  `stamp,tipe,lower,upper,mt,status` (tipe `BULL_OB`/`BEAR_OB`, level 50% Mean Threshold `mt`,
+  dan status `unmitigated`/`tapped`).
+- Seluruh blok data per timeframe disusun konsisten:
+  1. Ringkasan Data [TF] (struktur, summary referensi level padat, pool equal levels, volume)
+  2. Sequence Swing Terdeteksi [TF]
+  3. FVG Mekanis (Unfilled) [TF]
+  4. Order Block Aktif [TF]
+  5. Data Candle Mentah [TF]
 
 ---
 
@@ -342,6 +355,14 @@ Keluaran yang diharapkan:
   `[smc-prompt] Prompt copied to clipboard.` ke **stderr**.
 - stdout kosong (tanpa teks prompt) secara default.
 - Exit code `0`.
+
+#### 1b. Merender seluruh candle kalkulasi (--full-candles)
+
+Secara default prompt hanya merender tail 20 HTF, 30 MTF, dan 40 LTF candle terakhir demi efisiensi token LLM. Gunakan `--full-candles` jika ingin seluruh window candle closed dicetak ke tabel CSV prompt:
+
+```bash
+smc-prompt BTCUSDT --full-candles
+```
 
 #### 2. Menjalankan tanpa instalasi (via `python -m`)
 
