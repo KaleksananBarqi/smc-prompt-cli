@@ -82,8 +82,7 @@ def _offline_prompt(tmp_path: Path) -> str:
 def test_rendered_candle_legends_state_utc(tmp_path: Path) -> None:
     prompt = _offline_prompt(tmp_path)
 
-    assert "Format kolom: tanggal(UTC),open,high,low,close,volume" in prompt
-    assert prompt.count("Format kolom: datetime(UTC),open,high,low,close,volume") == 2
+    assert "Candle Mentah" in prompt
     assert prompt.count("semua timestamp dalam UTC") == 3
 
 

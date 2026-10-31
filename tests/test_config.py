@@ -126,7 +126,7 @@ def test_fmt_ratio():
     assert fmt_ratio(Decimal("0.100").normalize()) == "0.1"
 
 def test_fmt_volume():
-    assert fmt_volume("123.456") == "123.456"
+    assert fmt_volume("123.456") == "123"
 
 def test_fmt_relative_volume():
     assert fmt_relative_volume("1.234") == "x1.23"
@@ -144,8 +144,8 @@ def test_fmt_ratio_fixed():
 def test_date_formatting():
     dt = datetime(2026, 1, 1, 15, 30, 45, tzinfo=timezone.utc)
 
-    assert fmt_htf_date(dt) == "2026-01-01"
-    assert fmt_ltf_datetime(dt) == "2026-01-01 15:30"
+    assert fmt_htf_date(dt) == "01-01"
+    assert fmt_ltf_datetime(dt) == "01-01 15:30"
     assert fmt_generated_at(dt) == "2026-01-01T15:30:45Z"
     assert fmt_output_stamp(dt) == "20260101T153045Z"
     assert fmt_output_stamp_hyphen(dt) == "2026-01-01-15-30-45-UTC"

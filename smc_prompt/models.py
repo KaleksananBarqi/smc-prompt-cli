@@ -61,6 +61,7 @@ class SwingPoint:
     open_time: datetime
     price: Decimal
     type: SwingType
+    status: str = "untested"
 
     def is_more_extreme_than(self, other: "SwingPoint") -> bool:
         """Return True if this swing is more extreme than ``other``."""
@@ -134,6 +135,27 @@ class FVG:
     birth_time: datetime
     filled: bool
     index: int = 0
+    mitigated_index: int | None = None
+
+
+@dataclass(frozen=True)
+class OrderBlock:
+    """An institutional Order Block (OB) linked to an FVG displacement.
+
+    Bullish OB is the last bearish candle prior to a BULL FVG; Bearish OB is
+    the last bullish candle prior to a BEAR FVG. ``mt`` is the 50% Mean
+    Threshold (midpoint). ``status`` is one of ``"unmitigated"``, ``"tapped"``,
+    or ``"invalidated"``.
+    """
+
+    direction: FVGDirection
+    lower: Decimal
+    upper: Decimal
+    mt: Decimal
+    birth_time: datetime
+    index: int = 0
+    status: str = "unmitigated"
+    invalidated_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -154,6 +176,8 @@ class ReferenceFacts:
     nearest_low: str
     window_high: str
     window_low: str
+    ref_high_summary: str = ""
+    ref_low_summary: str = ""
 
 
 @dataclass(frozen=True)
@@ -168,6 +192,7 @@ class TimeframeAnalysis:
     dist_to_low: DistanceMetrics
     atr: Decimal | None
     candle_count: int
+    closed_count: int = 0
     swings: tuple[SwingPoint, ...] = field(default_factory=tuple)
     #: :func:`structure_analyzer.compute_level_status` result for the reported
     #: reference high (``"swept"`` / ``"untested"``).
@@ -180,6 +205,7 @@ class TimeframeAnalysis:
     equal_lows: tuple[EqualLevel, ...] = field(default_factory=tuple)
     #: Detected mechanical 3-candle Fair Value Gaps, chronological; empty when none.
     fvgs: tuple[FVG, ...] = field(default_factory=tuple)
+    order_blocks: tuple[OrderBlock, ...] = field(default_factory=tuple)
     #: The last ``config.swings_table_rows`` swings actually rendered.
     rendered_swings: tuple[SwingPoint, ...] = field(default_factory=tuple)
     #: Formatted recent/nearest/window-extreme reference strings (payload-ready).
@@ -223,84 +249,50 @@ REQUIRED_PLACEHOLDERS: tuple[str, ...] = (
     #: ATR(14) as a percentage of current price (Phase 5, #6).
     "ATR_PCT_OF_PRICE",
     "HTF_STRUCTURE_CLASS",
-    "HTF_SWING_HIGH",
-    "HTF_SWING_HIGH_DATE",
-    "HTF_DIST_TO_HIGH",
-    #: ATR-normalized distance to the reported swing high/low (Phase 5, #6).
-    "HTF_DIST_TO_HIGH_ATR",
-    "HTF_SWING_LOW",
-    "HTF_SWING_LOW_DATE",
-    "HTF_DIST_TO_LOW",
-    "HTF_DIST_TO_LOW_ATR",
+    "HTF_REF_HIGH_SUMMARY",
+    "HTF_REF_LOW_SUMMARY",
+    "HTF_EQUAL_HIGHS",
+    "HTF_EQUAL_LOWS",
     "HTF_VOLUME_RELATIVE",
     "HTF_VOLUME_SPIKE",
     "HTF_INTERVAL_LABEL",
     "HTF_CANDLE_COUNT",
     "HTF_CANDLE_TABLE_CSV",
     "HTF_SWINGS_TABLE",
-    "HTF_REF_HIGH_RECENT",
-    "HTF_REF_LOW_RECENT",
-    "HTF_REF_HIGH_NEAREST",
-    "HTF_REF_LOW_NEAREST",
-    "HTF_REF_HIGH_WINDOW_MAX",
-    "HTF_REF_LOW_WINDOW_MIN",
-    "HTF_EQUAL_HIGHS",
-    "HTF_EQUAL_LOWS",
     "HTF_FVG_TABLE",
     "HTF_FVG_COUNT",
-    "HTF_FVG_ATR_MULT",
+    "HTF_OB_TABLE",
+    "HTF_OB_COUNT",
     "MTF_STRUCTURE_CLASS",
-    "MTF_SWING_HIGH",
-    "MTF_SWING_HIGH_DATE",
-    "MTF_DIST_TO_HIGH",
-    "MTF_DIST_TO_HIGH_ATR",
-    "MTF_SWING_LOW",
-    "MTF_SWING_LOW_DATE",
-    "MTF_DIST_TO_LOW",
-    "MTF_DIST_TO_LOW_ATR",
+    "MTF_REF_HIGH_SUMMARY",
+    "MTF_REF_LOW_SUMMARY",
+    "MTF_EQUAL_HIGHS",
+    "MTF_EQUAL_LOWS",
     "MTF_VOLUME_RELATIVE",
     "MTF_VOLUME_SPIKE",
     "MTF_INTERVAL_LABEL",
     "MTF_CANDLE_COUNT",
     "MTF_CANDLE_TABLE_CSV",
     "MTF_SWINGS_TABLE",
-    "MTF_REF_HIGH_RECENT",
-    "MTF_REF_LOW_RECENT",
-    "MTF_REF_HIGH_NEAREST",
-    "MTF_REF_LOW_NEAREST",
-    "MTF_REF_HIGH_WINDOW_MAX",
-    "MTF_REF_LOW_WINDOW_MIN",
-    "MTF_EQUAL_HIGHS",
-    "MTF_EQUAL_LOWS",
     "MTF_FVG_TABLE",
     "MTF_FVG_COUNT",
-    "MTF_FVG_ATR_MULT",
+    "MTF_OB_TABLE",
+    "MTF_OB_COUNT",
     "LTF_STRUCTURE_CLASS",
-    "LTF_SWING_HIGH",
-    "LTF_SWING_HIGH_DATE",
-    "LTF_DIST_TO_HIGH",
-    "LTF_DIST_TO_HIGH_ATR",
-    "LTF_SWING_LOW",
-    "LTF_SWING_LOW_DATE",
-    "LTF_DIST_TO_LOW",
-    "LTF_DIST_TO_LOW_ATR",
+    "LTF_REF_HIGH_SUMMARY",
+    "LTF_REF_LOW_SUMMARY",
+    "LTF_EQUAL_HIGHS",
+    "LTF_EQUAL_LOWS",
     "LTF_VOLUME_RELATIVE",
     "LTF_VOLUME_SPIKE",
     "LTF_INTERVAL_LABEL",
     "LTF_CANDLE_COUNT",
     "LTF_CANDLE_TABLE_CSV",
     "LTF_SWINGS_TABLE",
-    "LTF_REF_HIGH_RECENT",
-    "LTF_REF_LOW_RECENT",
-    "LTF_REF_HIGH_NEAREST",
-    "LTF_REF_LOW_NEAREST",
-    "LTF_REF_HIGH_WINDOW_MAX",
-    "LTF_REF_LOW_WINDOW_MIN",
-    "LTF_EQUAL_HIGHS",
-    "LTF_EQUAL_LOWS",
     "LTF_FVG_TABLE",
     "LTF_FVG_COUNT",
-    "LTF_FVG_ATR_MULT",
+    "LTF_OB_TABLE",
+    "LTF_OB_COUNT",
 )
 
 #: Placeholders that are dropped entirely when ATR is disabled.

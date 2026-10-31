@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Sequence
 
 from .errors import ConfigError
@@ -275,6 +275,9 @@ def provider_interval(provider: str, interval: str) -> str:
 DEFAULT_HTF_CANDLES: int = 90
 DEFAULT_MTF_CANDLES: int = 186
 DEFAULT_LTF_CANDLES: int = 192
+DEFAULT_HTF_RENDER_CANDLES: int = 20
+DEFAULT_MTF_RENDER_CANDLES: int = 30
+DEFAULT_LTF_RENDER_CANDLES: int = 40
 DEFAULT_SWING_LOOKBACK: int = 5
 DEFAULT_SWING_MERGE_ATR_MULT: Decimal = Decimal("0.5")
 DEFAULT_ATR_PERIOD: int = 14
@@ -294,6 +297,7 @@ DEFAULT_FVG_ATR_MULT: Decimal = Decimal("0.1")
 #: Number of newest Fair Value Gaps rendered per timeframe table (oldest -> newest
 #: within the emitted window).
 DEFAULT_FVG_TABLE_ROWS: int = 8
+DEFAULT_OB_TABLE_ROWS: int = 5
 DEFAULT_CONTEXT_BUFFER: int = 50
 FETCH_LIMIT_MAX: int = 1000
 DEFAULT_REQUEST_TIMEOUT: float = 10.0
@@ -500,17 +504,14 @@ def fmt_ratio(value: Decimal | float | int | str) -> str:
 
 
 def fmt_volume(value: Decimal | float | int | str) -> str:
-    """Render a raw-candle volume deterministically (byte-stable).
+    """Render a raw-candle volume deterministically (byte-stable integer).
 
-    Rule: plain ``str(Decimal)`` of the value exactly as carried by the
-    :class:`~smc_prompt.models.Candle`. Binance klines deliver volume as a JSON
-    string, so ``Decimal(str(value))`` reproduces that literal digit sequence
-    without float rounding or magnitude-dependent formatting — the cheapest and
-    most reproducible column format. No thousands separators, no trailing
-    zeros are added or removed (the source already fixed them).
+    Volume is rounded to the nearest integer (ROUND_HALF_UP) to compress
+    token output while maintaining byte-stability.
     """
 
-    return format(Decimal(str(value)), "f")
+    d = Decimal(str(value))
+    return str(d.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 def fmt_relative_volume(value: Decimal | float | int | str) -> str:
@@ -552,15 +553,15 @@ def fmt_atr_distance(
 
 
 def fmt_htf_date(moment: datetime) -> str:
-    """HTF date format: ``%Y-%m-%d`` (UTC)."""
+    """HTF date format: ``%m-%d`` (UTC)."""
 
-    return moment.astimezone(timezone.utc).strftime("%Y-%m-%d")
+    return moment.astimezone(timezone.utc).strftime("%m-%d")
 
 
 def fmt_ltf_datetime(moment: datetime) -> str:
-    """LTF datetime format: ``%Y-%m-%d %H:%M`` (UTC)."""
+    """LTF datetime format: ``%m-%d %H:%M`` (UTC)."""
 
-    return moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M")
+    return moment.astimezone(timezone.utc).strftime("%m-%d %H:%M")
 
 
 def fmt_generated_at(moment: datetime) -> str:
@@ -601,6 +602,11 @@ class Config:
     ltf_candles: int = DEFAULT_LTF_CANDLES
     swing_lookback: int = DEFAULT_SWING_LOOKBACK
 
+    full_candles: bool = False
+    htf_render_candles: int = DEFAULT_HTF_RENDER_CANDLES
+    mtf_render_candles: int = DEFAULT_MTF_RENDER_CANDLES
+    ltf_render_candles: int = DEFAULT_LTF_RENDER_CANDLES
+
     distance_reference: str = DISTANCE_REFERENCE_NEAREST
     include_atr: bool = True
 
@@ -615,6 +621,7 @@ class Config:
     equal_levels_atr_mult: Decimal = DEFAULT_EQUAL_LEVELS_ATR_MULT
     fvg_atr_mult: Decimal = DEFAULT_FVG_ATR_MULT
     fvg_table_rows: int = DEFAULT_FVG_TABLE_ROWS
+    ob_table_rows: int = DEFAULT_OB_TABLE_ROWS
     context_buffer: int = DEFAULT_CONTEXT_BUFFER
     fetch_limit_max: int = FETCH_LIMIT_MAX
     request_timeout: float = DEFAULT_REQUEST_TIMEOUT
@@ -700,12 +707,18 @@ def build_config(
     htf_candles: int = DEFAULT_HTF_CANDLES,
     mtf_candles: int = DEFAULT_MTF_CANDLES,
     ltf_candles: int = DEFAULT_LTF_CANDLES,
+    full_candles: bool = False,
+    htf_render_candles: int = DEFAULT_HTF_RENDER_CANDLES,
+    mtf_render_candles: int = DEFAULT_MTF_RENDER_CANDLES,
+    ltf_render_candles: int = DEFAULT_LTF_RENDER_CANDLES,
     swing_lookback: int = DEFAULT_SWING_LOOKBACK,
     distance_reference: str = DISTANCE_REFERENCE_NEAREST,
     include_atr: bool = True,
     htf_interval: str = HTF_INTERVAL,
     mtf_interval: str = MTF_INTERVAL,
     ltf_interval: str = LTF_INTERVAL,
+    fvg_table_rows: int = DEFAULT_FVG_TABLE_ROWS,
+    ob_table_rows: int = DEFAULT_OB_TABLE_ROWS,
     output_dir: str = DEFAULT_OUTPUT_DIR,
     volume_mean_period: int = DEFAULT_VOLUME_MEAN_PERIOD,
     volume_spike_mult: Decimal = DEFAULT_VOLUME_SPIKE_MULT,
@@ -796,12 +809,19 @@ def build_config(
         htf_candles=htf_candles,
         mtf_candles=mtf_candles,
         ltf_candles=ltf_candles,
+        full_candles=full_candles,
+        htf_render_candles=htf_render_candles,
+        mtf_render_candles=mtf_render_candles,
+        ltf_render_candles=ltf_render_candles,
         swing_lookback=swing_lookback,
         distance_reference=distance_reference,
         include_atr=include_atr,
         htf_interval=htf_interval,
         mtf_interval=mtf_interval,
         ltf_interval=ltf_interval,
+        swings_table_rows=DEFAULT_SWINGS_TABLE_ROWS,
+        fvg_table_rows=fvg_table_rows,
+        ob_table_rows=ob_table_rows,
         output_dir=output_dir,
         volume_mean_period=volume_mean_period,
         volume_spike_mult=Decimal(str(volume_spike_mult)),

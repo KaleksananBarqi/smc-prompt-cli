@@ -364,6 +364,7 @@ def run(
     *,
     htf_candles: int = cfg.DEFAULT_HTF_CANDLES,
     ltf_candles: int = cfg.DEFAULT_LTF_CANDLES,
+    full_candles: bool = False,
     swing_lookback: int = cfg.DEFAULT_SWING_LOOKBACK,
     distance_reference: str = cfg.DISTANCE_REFERENCE_NEAREST,
     include_atr: bool = True,
@@ -494,6 +495,7 @@ def run(
         htf_candles=htf_candles,
         mtf_candles=mtf_candles,
         ltf_candles=ltf_candles,
+        full_candles=full_candles,
         swing_lookback=swing_lookback,
         distance_reference=distance_reference,
         include_atr=include_atr,
@@ -1001,6 +1003,12 @@ def run(
     help="Number of CLOSED LTF-interval candles in the LTF raw table (>= 10).",
 )
 @click.option(
+    "--full-candles",
+    is_flag=True,
+    default=False,
+    help="Render the full analysis window of closed candles in the raw candle tables.",
+)
+@click.option(
     "--htf-interval",
     type=str,
     default=cfg.HTF_INTERVAL,
@@ -1290,6 +1298,7 @@ def main(
     htf_candles: int,
     mtf_candles: int,
     ltf_candles: int,
+    full_candles: bool,
     htf_interval: str,
     mtf_interval: str,
     ltf_interval: str,
@@ -1361,6 +1370,7 @@ def main(
             htf_candles=htf_candles,
             mtf_candles=mtf_candles,
             ltf_candles=ltf_candles,
+            full_candles=full_candles,
             htf_interval=htf_interval,
             mtf_interval=mtf_interval,
             ltf_interval=ltf_interval,

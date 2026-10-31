@@ -4,96 +4,106 @@ Bertindaklah sebagai **Senior ICT/SMC Trading Analyst**. Analisis dilakukan meng
 
 - **Pair/Aset:** {{PAIR}}
 - **Waktu generate (UTC):** {{GENERATED_AT_UTC}}
+- **Current price:** {{CURRENT_PRICE}}
+- **ATR % of price (HTF):** {{ATR_PCT_OF_PRICE}}
 
 > Data di bawah dihasilkan otomatis dari live market data API ({{provider}}), BUKAN dari observasi visual chart. Perlakukan seluruh angka sebagai [FAKTA] terverifikasi. Anda tidak memiliki akses ke bentuk visual candle/wick di luar angka OHLC yang diberikan — jangan berasumsi detail visual yang tidak tercermin dalam angka ini.
+>
+> **Definisi Tabel:**
+> - **Sequence Swing:** Kolom `stamp,tipe,level,label,status`. Tipe: `SH`=Swing High, `SL`=Swing Low. Label: `HH`=Higher High, `HL`=Higher Low, `LH`=Lower High, `LL`=Lower Low, `EQH`=Equal High, `EQL`=Equal Low, `-`=pertama. Status: `untested` (belum tersentuh), `wick_sweep` (wick menembus tapi close tertolak), `reclaim_sweep` (close tembus 1 candle lalu langsung reclaim di candle berikutnya), `pending_break` (baru 1 candle close menembus), `broken` (terkonfirmasi break structural ≥2 candle close berturut-turut).
+> - **FVG Mekanis:** Kolom `stamp,tipe,lower,upper,status`. Tipe: `BULL`=Bullish FVG, `BEAR`=Bearish FVG. Menampilkan gap `unfilled` (atau `filled` dalam <= 3 candle terakhir).
+> - **Order Block Aktif:** Kolom `stamp,tipe,lower,upper,mt,status`. Tipe: `BULL_OB`=Bullish OB, `BEAR_OB`=Bearish OB. `mt`=Mean Threshold (50% level). Status: `unmitigated` (belum tersentuh), `tapped` (wick masuk zona / menyentuh mt tapi body belum close menembus).
+> - **Candle Mentah:** Kolom `stamp,open,high,low,close,volume` (volume dibulatkan integer).
 
 ### Ringkasan Data HTF ({{HTF_INTERVAL_LABEL}})
-- Current price: {{CURRENT_PRICE}}
-- ATR ≈ {{ATR_PCT_OF_PRICE}} (ATR(14) HTF)
 - Klasifikasi struktur (mekanis): {{HTF_STRUCTURE_CLASS}}
-- Swing high terdeteksi: {{HTF_SWING_HIGH}} pada {{HTF_SWING_HIGH_DATE}} (jarak dari current: {{HTF_DIST_TO_HIGH}}, {{HTF_DIST_TO_HIGH_ATR}}×ATR(14))
-- Swing low terdeteksi: {{HTF_SWING_LOW}} pada {{HTF_SWING_LOW_DATE}} (jarak dari current: {{HTF_DIST_TO_LOW}}, {{HTF_DIST_TO_LOW_ATR}}×ATR(14))
+{{HTF_REF_HIGH_SUMMARY}}
+{{HTF_REF_LOW_SUMMARY}}
 {% if INCLUDE_ATR %}
 - ATR(14): {{HTF_ATR14}} (opsional)
 {% endif %}
 - Equal Highs (liquidity pool): {{HTF_EQUAL_HIGHS}}
 - Equal Lows (liquidity pool): {{HTF_EQUAL_LOWS}}
 - Volume candle terakhir (relatif thd rata-rata N candle, spike bila ≥ ambang): {{HTF_VOLUME_RELATIVE}}, spike: {{HTF_VOLUME_SPIKE}}
-- Referensi HIGH terbaru (most-recent): {{HTF_REF_HIGH_RECENT}}
-- Referensi LOW terbaru (most-recent): {{HTF_REF_LOW_RECENT}}
-- Referensi HIGH terdekat (nearest): {{HTF_REF_HIGH_NEAREST}}
-- Referensi LOW terdekat (nearest): {{HTF_REF_LOW_NEAREST}}
-- Referensi HIGH ekstrem window: {{HTF_REF_HIGH_WINDOW_MAX}}
-- Referensi LOW ekstrem window: {{HTF_REF_LOW_WINDOW_MIN}}
 
 ### Sequence Swing Terdeteksi HTF ({{HTF_INTERVAL_LABEL}}, oldest→newest)
-Label: HH=Higher High, HL=Higher Low, LH=Lower High, LL=Lower Low, EQH=Equal High, EQL=Equal Low, '-'=swing pertama tipe tsb. Kolom: tanggal,tipe,level,label.
 ```
 {{HTF_SWINGS_TABLE}}
 ```
 
+### FVG Mekanis (Unfilled) HTF ({{HTF_INTERVAL_LABEL}}, oldest→newest, terbaru maks. {{HTF_FVG_COUNT}})
+```
+{{HTF_FVG_TABLE}}
+```
+
+### Order Block Aktif HTF ({{HTF_INTERVAL_LABEL}}, oldest→newest, terbaru maks. {{HTF_OB_COUNT}})
+```
+{{HTF_OB_TABLE}}
+```
+
 ### Data Candle Mentah HTF ({{HTF_INTERVAL_LABEL}}, {{HTF_CANDLE_COUNT}} candle terakhir, closed, semua timestamp dalam UTC)
-Format kolom: tanggal(UTC),open,high,low,close,volume
 ```
 {{HTF_CANDLE_TABLE_CSV}}
 ```
 
 ### Ringkasan Data MTF ({{MTF_INTERVAL_LABEL}})
-- Current price: {{CURRENT_PRICE}}
-- ATR ≈ {{ATR_PCT_OF_PRICE}} (ATR(14) HTF)
 - Klasifikasi struktur (mekanis): {{MTF_STRUCTURE_CLASS}}
-- Swing high terdeteksi: {{MTF_SWING_HIGH}} pada {{MTF_SWING_HIGH_DATE}} (jarak dari current: {{MTF_DIST_TO_HIGH}}, {{MTF_DIST_TO_HIGH_ATR}}×ATR(14))
-- Swing low terdeteksi: {{MTF_SWING_LOW}} pada {{MTF_SWING_LOW_DATE}} (jarak dari current: {{MTF_DIST_TO_LOW}}, {{MTF_DIST_TO_LOW_ATR}}×ATR(14))
+{{MTF_REF_HIGH_SUMMARY}}
+{{MTF_REF_LOW_SUMMARY}}
 {% if INCLUDE_ATR %}
 - ATR(14): {{MTF_ATR14}} (opsional)
 {% endif %}
 - Equal Highs (liquidity pool): {{MTF_EQUAL_HIGHS}}
 - Equal Lows (liquidity pool): {{MTF_EQUAL_LOWS}}
 - Volume candle terakhir (relatif thd rata-rata N candle, spike bila ≥ ambang): {{MTF_VOLUME_RELATIVE}}, spike: {{MTF_VOLUME_SPIKE}}
-- Referensi HIGH terbaru (most-recent): {{MTF_REF_HIGH_RECENT}}
-- Referensi LOW terbaru (most-recent): {{MTF_REF_LOW_RECENT}}
-- Referensi HIGH terdekat (nearest): {{MTF_REF_HIGH_NEAREST}}
-- Referensi LOW terdekat (nearest): {{MTF_REF_LOW_NEAREST}}
-- Referensi HIGH ekstrem window: {{MTF_REF_HIGH_WINDOW_MAX}}
-- Referensi LOW ekstrem window: {{MTF_REF_LOW_WINDOW_MIN}}
 
 ### Sequence Swing Terdeteksi MTF ({{MTF_INTERVAL_LABEL}}, oldest→newest)
-Label: HH=Higher High, HL=Higher Low, LH=Lower High, LL=Lower Low, EQH=Equal High, EQL=Equal Low, '-'=swing pertama tipe tsb. Kolom: datetime,tipe,level,label.
 ```
 {{MTF_SWINGS_TABLE}}
 ```
 
+### FVG Mekanis (Unfilled) MTF ({{MTF_INTERVAL_LABEL}}, oldest→newest, terbaru maks. {{MTF_FVG_COUNT}})
+```
+{{MTF_FVG_TABLE}}
+```
+
+### Order Block Aktif MTF ({{MTF_INTERVAL_LABEL}}, oldest→newest, terbaru maks. {{MTF_OB_COUNT}})
+```
+{{MTF_OB_TABLE}}
+```
+
 ### Data Candle Mentah MTF ({{MTF_INTERVAL_LABEL}}, {{MTF_CANDLE_COUNT}} candle terakhir, closed, semua timestamp dalam UTC)
-Format kolom: datetime(UTC),open,high,low,close,volume
 ```
 {{MTF_CANDLE_TABLE_CSV}}
 ```
 
 ### Ringkasan Data LTF ({{LTF_INTERVAL_LABEL}})
 - Klasifikasi struktur (mekanis): {{LTF_STRUCTURE_CLASS}}
-- Swing high terdeteksi: {{LTF_SWING_HIGH}} pada {{LTF_SWING_HIGH_DATE}} (jarak dari current: {{LTF_DIST_TO_HIGH}}, {{LTF_DIST_TO_HIGH_ATR}}×ATR(14))
-- Swing low terdeteksi: {{LTF_SWING_LOW}} pada {{LTF_SWING_LOW_DATE}} (jarak dari current: {{LTF_DIST_TO_LOW}}, {{LTF_DIST_TO_LOW_ATR}}×ATR(14))
+{{LTF_REF_HIGH_SUMMARY}}
+{{LTF_REF_LOW_SUMMARY}}
 {% if INCLUDE_ATR %}
 - ATR(14): {{LTF_ATR14}} (opsional)
 {% endif %}
 - Equal Highs (liquidity pool): {{LTF_EQUAL_HIGHS}}
 - Equal Lows (liquidity pool): {{LTF_EQUAL_LOWS}}
 - Volume candle terakhir (relatif thd rata-rata N candle, spike bila ≥ ambang): {{LTF_VOLUME_RELATIVE}}, spike: {{LTF_VOLUME_SPIKE}}
-- Referensi HIGH terbaru (most-recent): {{LTF_REF_HIGH_RECENT}}
-- Referensi LOW terbaru (most-recent): {{LTF_REF_LOW_RECENT}}
-- Referensi HIGH terdekat (nearest): {{LTF_REF_HIGH_NEAREST}}
-- Referensi LOW terdekat (nearest): {{LTF_REF_LOW_NEAREST}}
-- Referensi HIGH ekstrem window: {{LTF_REF_HIGH_WINDOW_MAX}}
-- Referensi LOW ekstrem window: {{LTF_REF_LOW_WINDOW_MIN}}
 
 ### Sequence Swing Terdeteksi LTF ({{LTF_INTERVAL_LABEL}}, oldest→newest)
-Label: HH=Higher High, HL=Higher Low, LH=Lower High, LL=Lower Low, EQH=Equal High, EQL=Equal Low, '-'=swing pertama tipe tsb. Kolom: datetime,tipe,level,label.
 ```
 {{LTF_SWINGS_TABLE}}
 ```
 
+### FVG Mekanis (Unfilled) LTF ({{LTF_INTERVAL_LABEL}}, oldest→newest, terbaru maks. {{LTF_FVG_COUNT}})
+```
+{{LTF_FVG_TABLE}}
+```
+
+### Order Block Aktif LTF ({{LTF_INTERVAL_LABEL}}, oldest→newest, terbaru maks. {{LTF_OB_COUNT}})
+```
+{{LTF_OB_TABLE}}
+```
+
 ### Data Candle Mentah LTF ({{LTF_INTERVAL_LABEL}}, {{LTF_CANDLE_COUNT}} candle terakhir, closed, semua timestamp dalam UTC)
-Format kolom: datetime(UTC),open,high,low,close,volume
 ```
 {{LTF_CANDLE_TABLE_CSV}}
 ```
@@ -133,24 +143,6 @@ Hindari klaim absolut ("pasti", "dijamin", "akan"). Gunakan kalibrasi probabilit
 
 - Jelaskan skenario _liquidity sweep / stop hunt_ terhadap level 2a-2b menuju pool di poin 3, berdasarkan sequence candle mentah di atas. [SPEKULASI]
 - Entry HANYA dikonfirmasi setelah manipulasi terjadi, via: CHoCH, MSS, FVG, atau OB — identifikasi dari tabel candle mentah di atas. [FAKTA setelah terjadi]
-
-### FVG Mekanis HTF ({{HTF_INTERVAL_LABEL}}, oldest→newest, terbaru maks. {{HTF_FVG_COUNT}})
-[FAKTA] Fair Value Gap 3-candle murni mekanis: bullish bila low[i] > high[i-2] (range [high[i-2], low[i]]), bearish bila high[i] < low[i-2] (range [high[i], low[i-2]]); gap di bawah {{HTF_FVG_ATR_MULT}}×ATR disaring. Kolom: tanggal,tipe,lower,upper,status (filled bila candle setelahnya menembus penuh rentang).
-```
-{{HTF_FVG_TABLE}}
-```
-
-### FVG Mekanis MTF ({{MTF_INTERVAL_LABEL}}, oldest→newest, terbaru maks. {{MTF_FVG_COUNT}})
-[FAKTA] Fair Value Gap 3-candle murni mekanis: bullish bila low[i] > high[i-2] (range [high[i-2], low[i]]), bearish bila high[i] < low[i-2] (range [high[i], low[i-2]]); gap di bawah {{MTF_FVG_ATR_MULT}}×ATR disaring. Kolom: datetime,tipe,lower,upper,status (filled bila candle setelahnya menembus penuh rentang).
-```
-{{MTF_FVG_TABLE}}
-```
-
-### FVG Mekanis LTF ({{LTF_INTERVAL_LABEL}}, oldest→newest, terbaru maks. {{LTF_FVG_COUNT}})
-[FAKTA] Fair Value Gap 3-candle murni mekanis: bullish bila low[i] > high[i-2] (range [high[i-2], low[i]]), bearish bila high[i] < low[i-2] (range [high[i], low[i-2]]); gap di bawah {{LTF_FVG_ATR_MULT}}×ATR disaring. Kolom: datetime,tipe,lower,upper,status (filled bila candle setelahnya menembus penuh rentang).
-```
-{{LTF_FVG_TABLE}}
-```
 
 ## 5. Trading Plan
 

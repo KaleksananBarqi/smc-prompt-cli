@@ -24,7 +24,7 @@ truncated to the requested row count.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Sequence
 
@@ -38,6 +38,7 @@ from .models import (
     EqualLevel,
     FVG,
     FVGDirection,
+    OrderBlock,
     ReferenceFacts,
     StructureClass,
     SwingPoint,
@@ -424,6 +425,31 @@ def detect_equal_levels(
 # --------------------------------------------------------------------------
 
 
+def _fvg_mitigation(
+    candles: Sequence[Candle],
+    index: int,
+    direction: FVGDirection,
+    lower: Decimal,
+    upper: Decimal,
+) -> tuple[bool, int | None]:
+    """Return (filled, mitigated_candle_index) when a later candle closes the gap.
+
+    A bullish gap is filled when any later closed candle's low trades at or
+    below its lower bound; a bearish gap when any later closed candle's high
+    trades at or above its upper bound. Deterministic, closed-series only.
+    """
+
+    for j in range(index + 1, len(candles)):
+        candle = candles[j]
+        if direction is FVGDirection.BULLISH:
+            if candle.low <= lower:
+                return True, j
+        else:
+            if candle.high >= upper:
+                return True, j
+    return False, None
+
+
 def _fvg_filled(
     candles: Sequence[Candle],
     index: int,
@@ -431,21 +457,9 @@ def _fvg_filled(
     lower: Decimal,
     upper: Decimal,
 ) -> bool:
-    """True when a candle strictly after the birth candle fully closes the gap.
+    """True when a candle strictly after the birth candle fully closes the gap."""
 
-    A bullish gap is filled when any later closed candle's low trades at or
-    below its lower bound; a bearish gap when any later closed candle's high
-    trades at or above its upper bound. Deterministic, closed-series only.
-    """
-
-    for candle in candles[index + 1 :]:
-        if direction is FVGDirection.BULLISH:
-            if candle.low <= lower:
-                return True
-        else:
-            if candle.high >= upper:
-                return True
-    return False
+    return _fvg_mitigation(candles, index, direction, lower, upper)[0]
 
 
 def detect_fvg(
@@ -491,14 +505,18 @@ def detect_fvg(
         if (upper - lower) < threshold:
             continue
 
+        filled, mitigated_idx = _fvg_mitigation(
+            candles, i, direction, lower, upper
+        )
         fvgs.append(
             FVG(
                 direction=direction,
                 lower=lower,
                 upper=upper,
                 birth_time=third.open_time,
-                filled=_fvg_filled(candles, i, direction, lower, upper),
+                filled=filled,
                 index=i,
+                mitigated_index=mitigated_idx,
             )
         )
 
@@ -506,31 +524,179 @@ def detect_fvg(
 
 
 # --------------------------------------------------------------------------
-# 4d. Level breach status (swept / untested) over the CLOSED series
+# 4d. Mechanical FVG-Linked Order Blocks (OB)
+# --------------------------------------------------------------------------
+
+
+def detect_order_blocks(
+    candles: Sequence[Candle], fvgs: Sequence[FVG]
+) -> list[OrderBlock]:
+    """Detect mechanical FVG-linked Order Blocks.
+
+    For each FVG at index ``i``:
+    - Bullish FVG: Looks back from ``i-2`` to ``max(0, i-4)`` for the latest bearish
+      candle (close < open). If none, falls back to the candle with the lowest low in that range.
+    - Bearish FVG: Looks back from ``i-2`` to ``max(0, i-4)`` for the latest bullish
+      candle (close > open). If none, falls back to the candle with the highest high in that range.
+    - Evaluates mitigation status against candles strictly after the OB's birth:
+      * "invalidated": body closed past distal boundary (close < lower for BULL, close > upper for BEAR).
+      * "tapped": traded into zone (low <= upper for BULL, high >= lower for BEAR) without invalidation.
+      * "unmitigated": never traded into zone.
+    Deduplicates multiple FVGs sharing the same base candle.
+    """
+
+    obs: list[OrderBlock] = []
+    seen_indices: set[tuple[FVGDirection, int]] = set()
+
+    for fvg in fvgs:
+        i = fvg.index
+        if i < 2 or i >= len(candles):
+            continue
+
+        start_idx = max(0, i - 4)
+        end_idx = i - 2  # inclusive
+
+        base_idx: int | None = None
+        if fvg.direction is FVGDirection.BULLISH:
+            for idx in range(end_idx, start_idx - 1, -1):
+                if candles[idx].close < candles[idx].open:
+                    base_idx = idx
+                    break
+            if base_idx is None:
+                base_idx = min(
+                    range(start_idx, end_idx + 1),
+                    key=lambda idx: candles[idx].low,
+                )
+        else:
+            for idx in range(end_idx, start_idx - 1, -1):
+                if candles[idx].close > candles[idx].open:
+                    base_idx = idx
+                    break
+            if base_idx is None:
+                base_idx = max(
+                    range(start_idx, end_idx + 1),
+                    key=lambda idx: candles[idx].high,
+                )
+
+        key = (fvg.direction, base_idx)
+        if key in seen_indices:
+            continue
+        seen_indices.add(key)
+
+        base_candle = candles[base_idx]
+        lower = base_candle.low
+        upper = base_candle.high
+        mt = (lower + upper) / Decimal("2")
+        birth_time = base_candle.open_time
+
+        status = "unmitigated"
+        invalidated_idx: int | None = None
+
+        for j in range(fvg.index + 1, len(candles)):
+            c = candles[j]
+            if fvg.direction is FVGDirection.BULLISH:
+                if c.close < lower:
+                    status = "invalidated"
+                    invalidated_idx = j
+                    break
+                elif c.low <= upper:
+                    status = "tapped"
+            else:
+                if c.close > upper:
+                    status = "invalidated"
+                    invalidated_idx = j
+                    break
+                elif c.high >= lower:
+                    status = "tapped"
+
+        obs.append(
+            OrderBlock(
+                direction=fvg.direction,
+                lower=lower,
+                upper=upper,
+                mt=mt,
+                birth_time=birth_time,
+                index=base_idx,
+                status=status,
+                invalidated_index=invalidated_idx,
+            )
+        )
+
+    obs.sort(key=lambda ob: ob.index)
+    return obs
+
+
+# --------------------------------------------------------------------------
+# 4e. Level breach status (untested / wick_sweep / reclaim_sweep / pending_break / broken)
 # --------------------------------------------------------------------------
 
 
 def compute_level_status(
     candles: Sequence[Candle], level: SwingPoint, swing_type: SwingType
 ) -> str:
-    """Return ``"swept"`` or ``"untested"`` for ``level`` over closed candles.
+    """Return status for ``level`` over closed candles strictly after its birth.
 
-    A high is *swept* when any closed candle **strictly after** the swing's own
-    candle prints a high strictly above the level; a low is *swept* when any
-    later candle prints a low strictly below the level. Otherwise ``untested``.
-    Mechanical and deterministic; operates on the closed series only.
+    Statuses:
+    - ``"untested"``: Price never breached the level.
+    - ``"broken"``: Price closed outside the level for >= 2 consecutive candles (BOS).
+    - ``"pending_break"``: The latest closed candle is the first candle to close outside the level.
+    - ``"reclaim_sweep"``: A candle closed outside the level, but the next candle closed back inside (2-candle stop hunt).
+    - ``"wick_sweep"``: Wick breached the level but every breaching candle closed inside (1-candle rejection).
     """
 
-    for candle in candles:
-        if candle.open_time <= level.open_time:
-            continue
-        if swing_type is SwingType.HIGH:
-            if candle.high > level.price:
-                return "swept"
-        else:
-            if candle.low < level.price:
-                return "swept"
-    return "untested"
+    subsequent = [c for c in candles if c.open_time > level.open_time]
+    if not subsequent:
+        return "untested"
+
+    if swing_type is SwingType.HIGH:
+        if not any(c.high > level.price for c in subsequent):
+            return "untested"
+
+        max_consecutive = 0
+        curr_consecutive = 0
+        has_reclaim = False
+        for c in subsequent:
+            if c.close > level.price:
+                curr_consecutive += 1
+                if curr_consecutive > max_consecutive:
+                    max_consecutive = curr_consecutive
+            else:
+                if curr_consecutive == 1:
+                    has_reclaim = True
+                curr_consecutive = 0
+
+        if max_consecutive >= 2:
+            return "broken"
+        if curr_consecutive == 1 and subsequent[-1].close > level.price:
+            return "pending_break"
+        if has_reclaim:
+            return "reclaim_sweep"
+        return "wick_sweep"
+
+    else:
+        if not any(c.low < level.price for c in subsequent):
+            return "untested"
+
+        max_consecutive = 0
+        curr_consecutive = 0
+        has_reclaim = False
+        for c in subsequent:
+            if c.close < level.price:
+                curr_consecutive += 1
+                if curr_consecutive > max_consecutive:
+                    max_consecutive = curr_consecutive
+            else:
+                if curr_consecutive == 1:
+                    has_reclaim = True
+                curr_consecutive = 0
+
+        if max_consecutive >= 2:
+            return "broken"
+        if curr_consecutive == 1 and subsequent[-1].close < level.price:
+            return "pending_break"
+        if has_reclaim:
+            return "reclaim_sweep"
+        return "wick_sweep"
 
 
 # --------------------------------------------------------------------------
@@ -636,6 +802,83 @@ def _window_extreme(
     return min(candidates, key=lambda s: s.price)
 
 
+def format_ref_summary(
+    current_price: Decimal,
+    recent: SwingPoint,
+    nearest: SwingPoint,
+    extreme: SwingPoint | None,
+    swing_type: SwingType,
+    candles: Sequence[Candle],
+    *,
+    htf: bool,
+    atr: Decimal | None = None,
+    price_format: cfg.PriceFormat | None = None,
+) -> str:
+    """Format deduplicated reference summary line for HIGH or LOW."""
+
+    pf = price_format or cfg.PriceFormat()
+    fmt = pf.fmt
+    type_label = "HIGH" if swing_type is SwingType.HIGH else "LOW"
+
+    def _details(s: SwingPoint, include_distance: bool = True) -> str:
+        stamp = (
+            cfg.fmt_htf_date(s.open_time)
+            if htf
+            else cfg.fmt_ltf_datetime(s.open_time)
+        )
+        status = compute_level_status(candles, s, swing_type)
+        if not include_distance:
+            return f"({stamp}, {status})"
+
+        diff = current_price - s.price
+        pct = (diff / s.price) * Decimal("100")
+        sign = "+" if diff >= 0 else "-"
+        pct_str = f"{sign}{abs(pct):.2f}%"
+        atr_str = ""
+        if atr is not None and atr > Decimal("0"):
+            mult = (abs(diff) / atr).quantize(Decimal("0.01"))
+            atr_str = f", {mult:.2f}xATR"
+        return f"({stamp}, {pct_str}{atr_str}, {status})"
+
+    p_rec = recent.price
+    p_near = nearest.price
+    p_ext = extreme.price if extreme is not None else None
+
+    # Case 1: All three same
+    if p_ext is not None and p_rec == p_near == p_ext:
+        return f"- Ref {type_label}: Recent/Nearest/Extreme={fmt(p_rec)} {_details(recent, True)}"
+
+    # Case 2: Recent == Nearest != Extreme
+    if p_rec == p_near:
+        rec_part = f"Recent/Nearest={fmt(p_rec)} {_details(recent, True)}"
+        if p_ext is not None and extreme is not None:
+            return f"- Ref {type_label}: {rec_part} | Extreme={fmt(p_ext)} {_details(extreme, False)}"
+        return f"- Ref {type_label}: {rec_part}"
+
+    # Case 3: Recent == Extreme != Nearest
+    if p_ext is not None and extreme is not None and p_rec == p_ext:
+        return (
+            f"- Ref {type_label}: Recent/Extreme={fmt(p_rec)} {_details(recent, True)}"
+            f" | Nearest={fmt(p_near)} {_details(nearest, True)}"
+        )
+
+    # Case 4: Nearest == Extreme != Recent
+    if p_ext is not None and extreme is not None and p_near == p_ext:
+        return (
+            f"- Ref {type_label}: Recent={fmt(p_rec)} {_details(recent, True)}"
+            f" | Nearest/Extreme={fmt(p_near)} {_details(nearest, True)}"
+        )
+
+    # Case 5: All different
+    parts = [
+        f"Recent={fmt(p_rec)} {_details(recent, True)}",
+        f"Nearest={fmt(p_near)} {_details(nearest, True)}",
+    ]
+    if p_ext is not None and extreme is not None:
+        parts.append(f"Extreme={fmt(p_ext)} {_details(extreme, False)}")
+    return f"- Ref {type_label}: " + " | ".join(parts)
+
+
 def build_reference_facts(
     current_price: Decimal,
     *,
@@ -648,6 +891,7 @@ def build_reference_facts(
     nearest_high: SwingPoint | None = None,
     nearest_low: SwingPoint | None = None,
     price_format: cfg.PriceFormat | None = None,
+    atr: Decimal | None = None,
 ) -> ReferenceFacts:
     """Build the recent/nearest/window-extreme reference strings.
 
@@ -668,6 +912,29 @@ def build_reference_facts(
 
     window_high = _window_extreme(rendered_swings, SwingType.HIGH)
     window_low = _window_extreme(rendered_swings, SwingType.LOW)
+
+    ref_high_summary = format_ref_summary(
+        current_price,
+        recent_high,
+        nearest_high,
+        window_high,
+        SwingType.HIGH,
+        candles,
+        htf=htf,
+        atr=atr,
+        price_format=price_format,
+    )
+    ref_low_summary = format_ref_summary(
+        current_price,
+        recent_low,
+        nearest_low,
+        window_low,
+        SwingType.LOW,
+        candles,
+        htf=htf,
+        atr=atr,
+        price_format=price_format,
+    )
 
     return ReferenceFacts(
         recent_high=_format_reference(
@@ -720,6 +987,8 @@ def build_reference_facts(
             ),
             price_format=price_format,
         ),
+        ref_high_summary=ref_high_summary,
+        ref_low_summary=ref_low_summary,
     )
 
 
@@ -840,14 +1109,19 @@ def analyze(
         swings, SwingType.LOW, current_price, cfg.DISTANCE_REFERENCE_NEAREST
     )
 
-    rendered_swings = tuple(swings[-config.swings_table_rows :])
+    fvgs = tuple(detect_fvg(closed, config.fvg_atr_mult, atr_value=atr))
+    order_blocks = tuple(detect_order_blocks(closed, fvgs))
+
+    swings_with_status = tuple(
+        replace(s, status=compute_level_status(closed, s, s.type))
+        for s in swings
+    )
+    rendered_swings = tuple(swings_with_status[-config.swings_table_rows :])
 
     tol = (
         config.equal_levels_atr_mult * atr if atr is not None else Decimal("0")
     )
     equal_highs, equal_lows = detect_equal_levels(swings, tol)
-
-    fvgs = tuple(detect_fvg(closed, config.fvg_atr_mult, atr_value=atr))
 
     volume = compute_relative_volume(
         closed,
@@ -860,13 +1134,14 @@ def analyze(
         current_price,
         htf=(timeframe == config.htf_interval),
         candles=closed,
-        swings=swings,
+        swings=swings_with_status,
         rendered_swings=rendered_swings,
         recent_high=recent_high,
         recent_low=recent_low,
         nearest_high=nearest_high,
         nearest_low=nearest_low,
         price_format=config.price_format,
+        atr=atr,
     )
 
     analysis = TimeframeAnalysis(
@@ -878,12 +1153,14 @@ def analyze(
         dist_to_low=dist_low,
         atr=atr,
         candle_count=stats.emitted_count,
-        swings=tuple(swings),
+        closed_count=stats.closed_count,
+        swings=swings_with_status,
         swing_high_status=compute_level_status(closed, ref_high, SwingType.HIGH),
         swing_low_status=compute_level_status(closed, ref_low, SwingType.LOW),
         equal_highs=equal_highs,
         equal_lows=equal_lows,
         fvgs=fvgs,
+        order_blocks=order_blocks,
         rendered_swings=rendered_swings,
         reference_facts=reference_facts,
         current_price=current_price,

@@ -302,9 +302,9 @@ def _offline_prompt(tmp_path: Path) -> str:
 def test_offline_prompt_renders_phase5_facts(tmp_path: Path) -> None:
     prompt = _offline_prompt(tmp_path)
 
-    assert "- ATR ≈ " in prompt
-    assert "% of price (ATR(14) HTF)" in prompt
-    assert "×ATR(14))" in prompt  # ATR-normalized distance appended per swing
+    assert "- **ATR % of price (HTF):** " in prompt
+    assert "% of price" in prompt
+    assert "xATR" in prompt  # ATR-normalized distance appended per swing
     assert "Volume candle terakhir" in prompt
     assert "spike:" in prompt
     # The ATR-normalized distance is rendered as a single x-prefixed ratio.
@@ -479,11 +479,11 @@ def test_mtf_uses_datetime_stamp() -> None:
     payload = _three_tier_payload()
 
     # MTF sits below the HTF tier, so it uses the datetime form, not the date.
-    assert payload["MTF_SWING_HIGH_DATE"] == "2026-01-01 00:00"
-    assert ":" in payload["MTF_SWING_HIGH_DATE"]
+    assert "01-01 00:00" in payload["MTF_REF_HIGH_SUMMARY"]
+    assert ":" in payload["MTF_REF_HIGH_SUMMARY"]
     # The first MTF candle row is datetime-stamped.
     assert payload["MTF_CANDLE_TABLE_CSV"].splitlines()[0].startswith(
-        "2026-01-01 00:00,"
+        "01-01 00:00,"
     )
 
 
@@ -493,7 +493,7 @@ def test_required_placeholders_all_resolved_for_three_tiers() -> None:
     payload = _three_tier_payload()
     mtf_keys = [key for key in REQUIRED_PLACEHOLDERS if key.startswith("MTF_")]
 
-    assert len(mtf_keys) == 26
+    assert len(mtf_keys) == 15
     assert all(key in payload for key in mtf_keys)
     assert all(str(payload[key]).strip() for key in mtf_keys)
     assert "MTF_ATR14" in payload
@@ -506,7 +506,7 @@ def test_analyze_three_series_renders_three_blocks(tmp_path: Path) -> None:
     assert "Ringkasan Data MTF" in prompt
     assert "Ringkasan Data LTF" in prompt
     assert "Multi-Timeframe Alignment (HTF, MTF & LTF)" in prompt
-    assert "FVG Mekanis MTF" in prompt
+    assert "FVG Mekanis (Unfilled) MTF" in prompt
 
 
 def test_no_atr_removes_all_three_atr_lines(tmp_path: Path) -> None:
@@ -531,10 +531,9 @@ def test_prompt_size_three_tier_bytes(tmp_path: Path) -> None:
     prompt = _offline_prompt(tmp_path)
     size = len(prompt.encode("utf-8"))
 
-    # Documentation anchor for DESIGN_SPEC §14: the 3-tier render stays well
-    # below the warn threshold.
+    # Token-compressed 3-tier render stays well below the warn threshold.
     assert size < cfg.PROMPT_BYTES_WARN
-    assert size > 18_684  # strictly larger than the old dual-tier artifact
+    assert size > 10_000
 
 
 def test_non_goal_strings_absent(tmp_path: Path) -> None:

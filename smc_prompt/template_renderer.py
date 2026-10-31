@@ -27,6 +27,7 @@ from .models import (
     FVG,
     FVGDirection,
     OPTIONAL_PLACEHOLDERS,
+    OrderBlock,
     REQUIRED_PLACEHOLDERS,
     RenderedPrompt,
     SwingPoint,
@@ -229,10 +230,10 @@ def _render_swings(
             else cfg.fmt_ltf_datetime(swing.open_time)
         )
         type_token = (
-            "SWING_HIGH" if swing.type is SwingType.HIGH else "SWING_LOW"
+            "SH" if swing.type is SwingType.HIGH else "SL"
         )
         rows.append(
-            ",".join([stamp, type_token, fmt(swing.price), label])
+            ",".join([stamp, type_token, fmt(swing.price), label, swing.status])
         )
     return "\n".join(rows)
 
@@ -258,28 +259,36 @@ def _render_equal_levels(
     )
 
 
+def _is_relevant_fvg(fvg: FVG, total_candles: int | None) -> bool:
+    if not fvg.filled:
+        return True
+    if total_candles is not None and fvg.mitigated_index is not None:
+        return fvg.mitigated_index >= (total_candles - 3)
+    return False
+
+
 def _render_fvg_table(
     fvgs: Sequence[FVG],
     *,
     htf: bool,
     limit: int,
+    total_candles: int | None = None,
     price_format: cfg.PriceFormat | None = None,
 ) -> str:
     """Render the newest mechanical FVGs (oldest -> newest within the window).
 
-    Row format: ``<stamp>,<FVG_BULLISH|FVG_BEARISH>,<lower>,<upper>,<status>``
-    where ``<stamp>`` is ``%Y-%m-%d`` (HTF) / ``%Y-%m-%d %H:%M`` (LTF) and
-    ``<status>`` is ``filled`` or ``unfilled``. Only the last ``limit`` gaps are
-    emitted. The literal ``NONE`` (non-empty) is emitted when no gap exists, as
-    required by the renderer's non-empty-placeholder contract. All numbers are
-    pre-formatted strings via :func:`config.fmt_price` (byte-stability).
+    Row format: ``<stamp>,<BULL|BEAR>,<lower>,<upper>,<status>`` where
+    ``<stamp>`` is ``%m-%d`` (HTF) / ``%m-%d %H:%M`` (LTF) and ``<status>`` is
+    ``filled`` or ``unfilled``. Only unfilled gaps (or filled within the last
+    3 closed candles) are emitted, up to ``limit`` rows.
     """
 
-    if not fvgs:
+    relevant = [fvg for fvg in fvgs if _is_relevant_fvg(fvg, total_candles)]
+    if not relevant:
         return "NONE"
 
     fmt = (price_format or cfg.PriceFormat()).fmt
-    window = list(fvgs)[-limit:]
+    window = list(relevant)[-limit:]
     rows: list[str] = []
     for fvg in window:
         stamp = (
@@ -288,9 +297,9 @@ def _render_fvg_table(
             else cfg.fmt_ltf_datetime(fvg.birth_time)
         )
         direction = (
-            "FVG_BULLISH"
+            "BULL"
             if fvg.direction is FVGDirection.BULLISH
-            else "FVG_BEARISH"
+            else "BEAR"
         )
         status = "filled" if fvg.filled else "unfilled"
         rows.append(
@@ -301,6 +310,55 @@ def _render_fvg_table(
                     fmt(fvg.lower),
                     fmt(fvg.upper),
                     status,
+                ]
+            )
+        )
+    return "\n".join(rows)
+
+
+def _is_relevant_ob(ob: OrderBlock, total_candles: int | None) -> bool:
+    if ob.status in ("unmitigated", "tapped"):
+        return True
+    if ob.status == "invalidated" and total_candles is not None and ob.invalidated_index is not None:
+        return ob.invalidated_index >= (total_candles - 3)
+    return False
+
+
+def _render_ob_table(
+    obs: Sequence[OrderBlock],
+    *,
+    htf: bool,
+    limit: int = 5,
+    total_candles: int | None = None,
+    price_format: cfg.PriceFormat | None = None,
+) -> str:
+    """Render active / recently-mitigated Order Blocks (oldest -> newest)."""
+
+    relevant = [ob for ob in obs if _is_relevant_ob(ob, total_candles)]
+    if not relevant:
+        return "NONE"
+
+    fmt = (price_format or cfg.PriceFormat()).fmt
+    window = list(relevant)[-limit:]
+    rows: list[str] = []
+    for ob in window:
+        stamp = (
+            cfg.fmt_htf_date(ob.birth_time)
+            if htf
+            else cfg.fmt_ltf_datetime(ob.birth_time)
+        )
+        type_token = (
+            "BULL_OB" if ob.direction is FVGDirection.BULLISH else "BEAR_OB"
+        )
+        rows.append(
+            ",".join(
+                [
+                    stamp,
+                    type_token,
+                    fmt(ob.lower),
+                    fmt(ob.upper),
+                    fmt(ob.mt),
+                    ob.status,
                 ]
             )
         )
@@ -408,42 +466,38 @@ def build_payload(
             "Reference facts missing from analysis; aborting before render."
         )
 
+    htf_render = (
+        list(htf_candles)
+        if config.full_candles
+        else list(htf_candles)[-config.htf_render_candles :]
+    )
+    mtf_render = (
+        list(mtf_candles)
+        if config.full_candles
+        else list(mtf_candles)[-config.mtf_render_candles :]
+    )
+    ltf_render = (
+        list(ltf_candles)
+        if config.full_candles
+        else list(ltf_candles)[-config.ltf_render_candles :]
+    )
+
     payload: dict[str, str] = {
         "PAIR": symbol.upper(),
         "GENERATED_AT_UTC": cfg.fmt_generated_at(generated_at),
         "CURRENT_PRICE": fmt(current_price),
         "ATR_PCT_OF_PRICE": _atr_pct_of_price(htf, current_price),
         "HTF_STRUCTURE_CLASS": htf.structure_class.value,
-        "HTF_SWING_HIGH": fmt(htf.swing_high.price),
-        "HTF_SWING_HIGH_DATE": cfg.fmt_htf_date(htf.swing_high.open_time),
-        "HTF_DIST_TO_HIGH": price_format.fmt_distance(
-            current_price, htf.swing_high.price
-        ),
-        "HTF_DIST_TO_HIGH_ATR": _atr_normalized_distance(
-            current_price, htf.swing_high.price, htf.atr
-        ),
-        "HTF_SWING_LOW": fmt(htf.swing_low.price),
-        "HTF_SWING_LOW_DATE": cfg.fmt_htf_date(htf.swing_low.open_time),
-        "HTF_DIST_TO_LOW": price_format.fmt_distance(
-            current_price, htf.swing_low.price
-        ),
-        "HTF_DIST_TO_LOW_ATR": _atr_normalized_distance(
-            current_price, htf.swing_low.price, htf.atr
-        ),
+        "HTF_REF_HIGH_SUMMARY": htf_facts.ref_high_summary or f"- Ref HIGH: {htf_facts.recent_high}",
+        "HTF_REF_LOW_SUMMARY": htf_facts.ref_low_summary or f"- Ref LOW: {htf_facts.recent_low}",
         "HTF_VOLUME_RELATIVE": _volume_relative(htf),
         "HTF_VOLUME_SPIKE": _volume_spike(htf),
         "HTF_INTERVAL_LABEL": config.htf_interval_label,
-        "HTF_CANDLE_COUNT": str(htf.candle_count),
+        "HTF_CANDLE_COUNT": str(len(htf_render)),
         "HTF_CANDLE_TABLE_CSV": render_csv_table(
-            htf_candles, htf=True, price_format=price_format
+            htf_render, htf=True, price_format=price_format
         ),
         "HTF_SWINGS_TABLE": htf_swings,
-        "HTF_REF_HIGH_RECENT": htf_facts.recent_high,
-        "HTF_REF_LOW_RECENT": htf_facts.recent_low,
-        "HTF_REF_HIGH_NEAREST": htf_facts.nearest_high,
-        "HTF_REF_LOW_NEAREST": htf_facts.nearest_low,
-        "HTF_REF_HIGH_WINDOW_MAX": htf_facts.window_high,
-        "HTF_REF_LOW_WINDOW_MIN": htf_facts.window_low,
         "HTF_EQUAL_HIGHS": _render_equal_levels(
             htf.equal_highs, price_format=price_format
         ),
@@ -454,41 +508,29 @@ def build_payload(
             htf.fvgs,
             htf=True,
             limit=config.fvg_table_rows,
+            total_candles=(htf.closed_count or htf.candle_count),
             price_format=price_format,
         ),
         "HTF_FVG_COUNT": str(config.fvg_table_rows),
-        "HTF_FVG_ATR_MULT": cfg.fmt_ratio(config.fvg_atr_mult),
+        "HTF_OB_TABLE": _render_ob_table(
+            htf.order_blocks,
+            htf=True,
+            limit=config.ob_table_rows,
+            total_candles=(htf.closed_count or htf.candle_count),
+            price_format=price_format,
+        ),
+        "HTF_OB_COUNT": str(config.ob_table_rows),
         "MTF_STRUCTURE_CLASS": mtf.structure_class.value,
-        "MTF_SWING_HIGH": fmt(mtf.swing_high.price),
-        "MTF_SWING_HIGH_DATE": cfg.fmt_ltf_datetime(mtf.swing_high.open_time),
-        "MTF_DIST_TO_HIGH": price_format.fmt_distance(
-            current_price, mtf.swing_high.price
-        ),
-        "MTF_DIST_TO_HIGH_ATR": _atr_normalized_distance(
-            current_price, mtf.swing_high.price, mtf.atr
-        ),
-        "MTF_SWING_LOW": fmt(mtf.swing_low.price),
-        "MTF_SWING_LOW_DATE": cfg.fmt_ltf_datetime(mtf.swing_low.open_time),
-        "MTF_DIST_TO_LOW": price_format.fmt_distance(
-            current_price, mtf.swing_low.price
-        ),
-        "MTF_DIST_TO_LOW_ATR": _atr_normalized_distance(
-            current_price, mtf.swing_low.price, mtf.atr
-        ),
+        "MTF_REF_HIGH_SUMMARY": mtf_facts.ref_high_summary or f"- Ref HIGH: {mtf_facts.recent_high}",
+        "MTF_REF_LOW_SUMMARY": mtf_facts.ref_low_summary or f"- Ref LOW: {mtf_facts.recent_low}",
         "MTF_VOLUME_RELATIVE": _volume_relative(mtf),
         "MTF_VOLUME_SPIKE": _volume_spike(mtf),
         "MTF_INTERVAL_LABEL": config.mtf_interval_label,
-        "MTF_CANDLE_COUNT": str(mtf.candle_count),
+        "MTF_CANDLE_COUNT": str(len(mtf_render)),
         "MTF_CANDLE_TABLE_CSV": render_csv_table(
-            mtf_candles, htf=False, price_format=price_format
+            mtf_render, htf=False, price_format=price_format
         ),
         "MTF_SWINGS_TABLE": mtf_swings,
-        "MTF_REF_HIGH_RECENT": mtf_facts.recent_high,
-        "MTF_REF_LOW_RECENT": mtf_facts.recent_low,
-        "MTF_REF_HIGH_NEAREST": mtf_facts.nearest_high,
-        "MTF_REF_LOW_NEAREST": mtf_facts.nearest_low,
-        "MTF_REF_HIGH_WINDOW_MAX": mtf_facts.window_high,
-        "MTF_REF_LOW_WINDOW_MIN": mtf_facts.window_low,
         "MTF_EQUAL_HIGHS": _render_equal_levels(
             mtf.equal_highs, price_format=price_format
         ),
@@ -499,41 +541,29 @@ def build_payload(
             mtf.fvgs,
             htf=False,
             limit=config.fvg_table_rows,
+            total_candles=(mtf.closed_count or mtf.candle_count),
             price_format=price_format,
         ),
         "MTF_FVG_COUNT": str(config.fvg_table_rows),
-        "MTF_FVG_ATR_MULT": cfg.fmt_ratio(config.fvg_atr_mult),
+        "MTF_OB_TABLE": _render_ob_table(
+            mtf.order_blocks,
+            htf=False,
+            limit=config.ob_table_rows,
+            total_candles=(mtf.closed_count or mtf.candle_count),
+            price_format=price_format,
+        ),
+        "MTF_OB_COUNT": str(config.ob_table_rows),
         "LTF_STRUCTURE_CLASS": ltf.structure_class.value,
-        "LTF_SWING_HIGH": fmt(ltf.swing_high.price),
-        "LTF_SWING_HIGH_DATE": cfg.fmt_ltf_datetime(ltf.swing_high.open_time),
-        "LTF_DIST_TO_HIGH": price_format.fmt_distance(
-            current_price, ltf.swing_high.price
-        ),
-        "LTF_DIST_TO_HIGH_ATR": _atr_normalized_distance(
-            current_price, ltf.swing_high.price, ltf.atr
-        ),
-        "LTF_SWING_LOW": fmt(ltf.swing_low.price),
-        "LTF_SWING_LOW_DATE": cfg.fmt_ltf_datetime(ltf.swing_low.open_time),
-        "LTF_DIST_TO_LOW": price_format.fmt_distance(
-            current_price, ltf.swing_low.price
-        ),
-        "LTF_DIST_TO_LOW_ATR": _atr_normalized_distance(
-            current_price, ltf.swing_low.price, ltf.atr
-        ),
+        "LTF_REF_HIGH_SUMMARY": ltf_facts.ref_high_summary or f"- Ref HIGH: {ltf_facts.recent_high}",
+        "LTF_REF_LOW_SUMMARY": ltf_facts.ref_low_summary or f"- Ref LOW: {ltf_facts.recent_low}",
         "LTF_VOLUME_RELATIVE": _volume_relative(ltf),
         "LTF_VOLUME_SPIKE": _volume_spike(ltf),
         "LTF_INTERVAL_LABEL": config.ltf_interval_label,
-        "LTF_CANDLE_COUNT": str(ltf.candle_count),
+        "LTF_CANDLE_COUNT": str(len(ltf_render)),
         "LTF_CANDLE_TABLE_CSV": render_csv_table(
-            ltf_candles, htf=False, price_format=price_format
+            ltf_render, htf=False, price_format=price_format
         ),
         "LTF_SWINGS_TABLE": ltf_swings,
-        "LTF_REF_HIGH_RECENT": ltf_facts.recent_high,
-        "LTF_REF_LOW_RECENT": ltf_facts.recent_low,
-        "LTF_REF_HIGH_NEAREST": ltf_facts.nearest_high,
-        "LTF_REF_LOW_NEAREST": ltf_facts.nearest_low,
-        "LTF_REF_HIGH_WINDOW_MAX": ltf_facts.window_high,
-        "LTF_REF_LOW_WINDOW_MIN": ltf_facts.window_low,
         "LTF_EQUAL_HIGHS": _render_equal_levels(
             ltf.equal_highs, price_format=price_format
         ),
@@ -544,10 +574,18 @@ def build_payload(
             ltf.fvgs,
             htf=False,
             limit=config.fvg_table_rows,
+            total_candles=(ltf.closed_count or ltf.candle_count),
             price_format=price_format,
         ),
         "LTF_FVG_COUNT": str(config.fvg_table_rows),
-        "LTF_FVG_ATR_MULT": cfg.fmt_ratio(config.fvg_atr_mult),
+        "LTF_OB_TABLE": _render_ob_table(
+            ltf.order_blocks,
+            htf=False,
+            limit=config.ob_table_rows,
+            total_candles=(ltf.closed_count or ltf.candle_count),
+            price_format=price_format,
+        ),
+        "LTF_OB_COUNT": str(config.ob_table_rows),
     }
 
     if config.include_atr:
