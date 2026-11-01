@@ -114,19 +114,33 @@ DEFAULT_BASE_URLS: tuple[str, ...] = (
 
 PROVIDER_BINANCE: str = "binance"
 PROVIDER_BITUNIX: str = "bitunix"
+PROVIDER_MEXC: str = "mexc"
+PROVIDER_GATE: str = "gate"
 PROVIDER_TWELVEDATA: str = "twelvedata"
 PROVIDER_OANDA: str = "oanda"
 PROVIDERS: tuple[str, ...] = (
     PROVIDER_BINANCE,
     PROVIDER_BITUNIX,
+    PROVIDER_MEXC,
+    PROVIDER_GATE,
     PROVIDER_TWELVEDATA,
     PROVIDER_OANDA,
+)
+
+#: Urutan prioritas rantai failover otomatis untuk provider crypto publik (USDT-M Futures).
+CRYPTO_FAILOVER_CHAIN: tuple[str, ...] = (
+    PROVIDER_BINANCE,
+    PROVIDER_BITUNIX,
+    PROVIDER_MEXC,
+    PROVIDER_GATE,
 )
 
 #: Human-readable provider names used in messages / the prompt banner.
 PROVIDER_LABELS: dict[str, str] = {
     PROVIDER_BINANCE: "Binance",
     PROVIDER_BITUNIX: "Bitunix",
+    PROVIDER_MEXC: "MEXC",
+    PROVIDER_GATE: "Gate.io",
     PROVIDER_TWELVEDATA: "Twelve Data",
     PROVIDER_OANDA: "OANDA",
 }
@@ -146,6 +160,39 @@ BITUNIX_INTERVAL_MAP: dict[str, str] = {
     "1d": "1d",
     "3d": "3d",
     "1w": "1w",
+}
+
+#: Canonical interval -> MEXC Futures ``interval`` parameter.
+MEXC_INTERVAL_MAP: dict[str, str] = {
+    "1m": "Min1",
+    "5m": "Min5",
+    "15m": "Min15",
+    "30m": "Min30",
+    "1h": "Min60",
+    "4h": "Hour4",
+    "8h": "Hour8",
+    "1d": "Day1",
+    "1w": "Week1",
+    "1M": "Month1",
+}
+
+#: Canonical interval -> Gate.io Futures ``interval`` parameter.
+GATE_INTERVAL_MAP: dict[str, str] = {
+    "1m": "1m",
+    "3m": "3m",
+    "5m": "5m",
+    "15m": "15m",
+    "30m": "30m",
+    "1h": "1h",
+    "2h": "2h",
+    "4h": "4h",
+    "6h": "6h",
+    "8h": "8h",
+    "12h": "12h",
+    "1d": "1d",
+    "7d": "7d",
+    "1w": "1w",
+    "30d": "30d",
 }
 
 #: Canonical (Binance-style) interval -> Twelve Data ``interval`` parameter.
@@ -179,6 +226,12 @@ OANDA_INTERVAL_MAP: dict[str, str] = {
 
 #: Default Bitunix Futures host.
 BITUNIX_HOST: str = "https://fapi.bitunix.com"
+
+#: Default MEXC Futures host.
+MEXC_HOST: str = "https://api.mexc.com"
+
+#: Default Gate.io Futures host.
+GATE_HOST: str = "https://api.gateio.ws"
 
 #: Default OANDA v20 host. ``practice`` (demo) is the default because a free
 #: practice account is enough to read candles; ``live`` needs a funded account.
@@ -219,16 +272,28 @@ def provider_label(provider: str) -> str:
 def provider_symbol(provider: str, symbol: str) -> str:
     """Map a canonical uppercase symbol to the provider's instrument code.
 
-    Binance and Bitunix use the canonical spelling verbatim. The FX providers accept a
-    separated form (``XAU/USD`` for Twelve Data, ``XAU_USD`` for OANDA); the
-    explicit :data:`PROVIDER_SYMBOLS` table covers the metallic pairs, and a
-    deterministic 6-letter FX heuristic (``EURUSD`` -> ``EUR/USD`` /
-    ``EUR_USD``) covers the common currency majors. Anything else is passed
-    through verbatim so a caller can supply the provider's own instrument code.
+    Binance and Bitunix use the canonical spelling verbatim (e.g. ``BTCUSDT``).
+    MEXC and Gate Futures use underscore delimiters (e.g. ``BTC_USDT``).
+    The FX providers accept a separated form (``XAU/USD`` for Twelve Data,
+    ``XAU_USD`` for OANDA); the explicit :data:`PROVIDER_SYMBOLS` table covers
+    the metallic pairs, and a deterministic 6-letter FX heuristic (``EURUSD`` ->
+    ``EUR/USD`` / ``EUR_USD``) covers the common currency majors. Anything else
+    is passed through verbatim so a caller can supply the provider's own instrument code.
     """
 
     normalized = (symbol or "").strip().upper()
     if provider in (PROVIDER_BINANCE, PROVIDER_BITUNIX):
+        return normalized
+
+    if provider in (PROVIDER_MEXC, PROVIDER_GATE):
+        if "_" in normalized:
+            return normalized
+        for suffix in ("USDT", "USDC", "USD", "BUSD"):
+            if normalized.endswith(suffix) and len(normalized) > len(suffix):
+                base = normalized[:-len(suffix)]
+                return f"{base}_{suffix}"
+        if len(normalized) == 6 and normalized.isalpha():
+            return f"{normalized[:3]}_{normalized[3:]}"
         return normalized
 
     explicit = PROVIDER_SYMBOLS.get(provider, {})
@@ -253,6 +318,10 @@ def provider_interval(provider: str, interval: str) -> str:
 
     if provider == PROVIDER_BITUNIX:
         table = BITUNIX_INTERVAL_MAP
+    elif provider == PROVIDER_MEXC:
+        table = MEXC_INTERVAL_MAP
+    elif provider == PROVIDER_GATE:
+        table = GATE_INTERVAL_MAP
     elif provider == PROVIDER_TWELVEDATA:
         table = TWELVEDATA_INTERVAL_MAP
     elif provider == PROVIDER_OANDA:
@@ -799,7 +868,7 @@ def build_config(
     # the derived volume facts (and the zero-volume delisted heuristic) are
     # disabled unless the caller explicitly overrides it.
     resolved_volume_available = (
-        provider == PROVIDER_BINANCE
+        provider in CRYPTO_FAILOVER_CHAIN
         if volume_available is None
         else bool(volume_available)
     )

@@ -341,6 +341,7 @@ def test_cli_network_is_default_path(monkeypatch: pytest.MonkeyPatch) -> None:
             distance_reference="nearest",
             include_atr=True,
             output_dir="output",
+            no_fallback=True,
         )
 
     assert built.get("network") is True

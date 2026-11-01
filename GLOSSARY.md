@@ -29,3 +29,12 @@ Manipulasi likuiditas 2-candle (*2-Candle Stop Hunt*) di mana candlestick pertam
 
 ### Break of Structure (BOS)
 Penembusan struktural riil (*Structural Break*) di mana harga menembus level swing dan berhasil bertahan dengan *close* di luar level tersebut selama minimal 2 candlestick berturut-turut ($\ge 2$ consecutive closes). Membedakan kelanjutan tren dari manipulasi likuiditas (*sweep*).
+
+### Crypto Failover Chain
+Mekanisme pengalihan otomatis berurutan antar-exchange kripto publik (`binance` ➔ `bitunix` ➔ `mexc` ➔ `gate`) saat terjadi kegagalan koneksi jaringan (`NetworkError`), guna menjamin kontinuitas penarikan data pasar tanpa interupsi manual.
+_Avoid_: Provider Fallback, Exchange Redundancy, Network Retry.
+
+### Strict Provider Mode
+Mode eksekusi di mana pengalihan penyedia data otomatis dinonaktifkan (`--no-fallback`), memaksa perintah gagal seketika jika exchange yang diminta secara eksplisit tidak dapat dihubungi.
+_Avoid_: Hard Mode, Fail-Fast Flag, No-Failover.
+

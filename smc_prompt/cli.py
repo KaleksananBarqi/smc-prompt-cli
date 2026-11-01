@@ -9,9 +9,10 @@ from __future__ import annotations
 import os
 import sys
 import traceback
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Any
 
 import click
 
@@ -28,6 +29,9 @@ from .errors import (
     SymbolStatusWarning,
     exit_code_for,
 )
+from .gate_source import GateSource
+from .mexc_source import MexcSource
+from .models import Candle
 from .oanda_source import OandaSource
 from .output import deliver
 from .provider_base import price_sanity_warning
@@ -73,6 +77,24 @@ class RunResult:
     #: were validated and resolved settings printed, but nothing was fetched,
     #: rendered, or written.
     dry_run: bool = False
+
+
+@dataclass(frozen=True)
+class _AcquiredMarketData:
+    """Struktur data kontainer hasil penarikan data pasar dari exchange aktif."""
+
+    mode: str
+    fetcher: Any
+    active_config: cfg.Config
+    server_time: datetime | None
+    candidate_warnings: list[str]
+    raw_candles: list[Candle] = field(default_factory=list)
+    htf_raw: list[Candle] = field(default_factory=list)
+    mtf_raw: list[Candle] = field(default_factory=list)
+    ltf_raw: list[Candle] = field(default_factory=list)
+    ltf_atr: Decimal | None = None
+    reference_candle: Candle | None = None
+    current_price: Decimal | None = None
 
 
 def _ensure_utf8_streams() -> None:
@@ -145,7 +167,7 @@ def _make_provider_source(
     oanda_token: str | None,
     oanda_account_id: str | None,
     oanda_env: str,
-) -> TwelveDataSource | OandaSource | BitunixSource:
+) -> TwelveDataSource | OandaSource | BitunixSource | MexcSource | GateSource:
     """Build the configured network data source (Binance is built separately).
 
     Every provider exposes the same public shape, so the analysis pipeline below
@@ -154,6 +176,10 @@ def _make_provider_source(
 
     if config.provider == cfg.PROVIDER_BITUNIX:
         return BitunixSource(config)
+    if config.provider == cfg.PROVIDER_MEXC:
+        return MexcSource(config)
+    if config.provider == cfg.PROVIDER_GATE:
+        return GateSource(config)
     if config.provider == cfg.PROVIDER_TWELVEDATA:
         return TwelveDataSource(config, api_key=twelvedata_key or "")
     if config.provider == cfg.PROVIDER_OANDA:
@@ -164,6 +190,46 @@ def _make_provider_source(
             account_id=oanda_account_id,
         )
     raise ConfigError(f"Unsupported provider '{config.provider}'.")
+
+
+def _build_fetcher(
+    provider_name: str,
+    active_config: cfg.Config,
+    *,
+    offline_mode: bool,
+    offline_htf: str | None,
+    offline_mtf: str | None,
+    offline_ltf: str | None,
+    key: str | None,
+    token: str | None,
+    account_id: str | None,
+    oanda_env: str,
+) -> (
+    DataFetcher
+    | LocalCsvSource
+    | TwelveDataSource
+    | OandaSource
+    | BitunixSource
+    | MexcSource
+    | GateSource
+):
+    """Membuat instance objek fetcher yang sesuai berdasarkan provider yang dipilih."""
+    if offline_mode:
+        return LocalCsvSource(
+            active_config,
+            htf_file=offline_htf,
+            mtf_file=offline_mtf,
+            ltf_file=offline_ltf,
+        )
+    if provider_name == cfg.PROVIDER_BINANCE:
+        return DataFetcher(active_config)
+    return _make_provider_source(
+        active_config,
+        twelvedata_key=key,
+        oanda_token=token,
+        oanda_account_id=account_id,
+        oanda_env=oanda_env,
+    )
 
 
 
@@ -238,6 +304,7 @@ def _print_resolved_settings(
     exit_price: float | None = None,
     validate_interval: str = cfg.DEFAULT_VALIDATE_INTERVAL,
     validate_candles: int = cfg.DEFAULT_VALIDATE_CANDLES,
+    no_fallback: bool = False,
 ) -> None:
     """Print the resolved run settings for ``--dry-run`` (Phase 5, #16).
 
@@ -402,6 +469,7 @@ def run(
     exit_price: float | None = None,
     validate_interval: str = cfg.DEFAULT_VALIDATE_INTERVAL,
     validate_candles: int = cfg.DEFAULT_VALIDATE_CANDLES,
+    no_fallback: bool = False,
 ) -> RunResult:
     """Chain fetch -> analyze -> render -> output. Raises on any failure."""
 
@@ -543,86 +611,192 @@ def run(
             exit_price=exit_price,
             validate_interval=validate_interval,
             validate_candles=validate_candles,
+            no_fallback=no_fallback,
         )
         return RunResult("", "", False, False, (), dry_run=True)
 
     warnings: list[str] = []
-    # Data source selection. Three interchangeable sources share one public
-    # shape, so the analysis pipeline below is untouched by the choice:
-    #   * offline CSV      — enabled ONLY by --input-csv (network-free)
-    #   * Binance          — the default network provider (crypto)
-    #   * Twelve Data / OANDA — network providers that can serve XAUUSD, which
-    #     Binance Futures cannot (no fiat/forex/metal instruments)
-    fetcher: (
-        DataFetcher
-        | LocalCsvSource
-        | TwelveDataSource
-        | OandaSource
-        | BitunixSource
-    )
-    if offline_mode:
-        fetcher = LocalCsvSource(
-            config,
-            htf_file=offline_htf,
-            mtf_file=offline_mtf,
-            ltf_file=offline_ltf,
-        )
-    elif config.provider == cfg.PROVIDER_BINANCE:
-        fetcher = DataFetcher(config)
+
+    # Tentukan urutan provider untuk automatic failover.
+    # Offline mode, flag --no-fallback, atau provider FX non-crypto (TwelveData, OANDA) mengecualikan failover.
+    if offline_mode or no_fallback or config.provider not in cfg.CRYPTO_FAILOVER_CHAIN:
+        candidates = [config.provider]
     else:
-        fetcher = _make_provider_source(
-            config,
-            twelvedata_key=key,
-            oanda_token=token,
-            oanda_account_id=account_id,
+        start_idx = cfg.CRYPTO_FAILOVER_CHAIN.index(config.provider)
+        candidates = list(cfg.CRYPTO_FAILOVER_CHAIN[start_idx:])
+
+    acquired_data: _AcquiredMarketData | None = None
+    last_network_exc: NetworkError | None = None
+
+    for candidate_idx, candidate_provider in enumerate(candidates):
+        is_fallback = candidate_provider != config.provider
+        active_config = replace(config, provider=candidate_provider)
+
+        # Validasi dukungan interval pada candidate exchange.
+        # Jika candidate adalah exchange perantara dalam rantai failover (bukan provider pilihan awal user)
+        # dan tidak mendukung interval yang diminta (contoh: MEXC tidak mendukung 2h saat failover dari Binance),
+        # lewati kandidat tersebut dan lanjutkan ke exchange berikutnya dalam rantai.
+        needed_intervals: list[str]
+        if candles_only:
+            needed_intervals = [review_interval]
+        elif validate_setup:
+            needed_intervals = [validate_interval]
+        else:
+            needed_intervals = [
+                active_config.htf_interval,
+                active_config.mtf_interval,
+                active_config.ltf_interval,
+            ]
+
+        unsupported_interval: str | None = None
+        for intv in needed_intervals:
+            try:
+                cfg.provider_interval(candidate_provider, intv)
+            except ConfigError:
+                unsupported_interval = intv
+                break
+
+        if unsupported_interval is not None:
+            if is_fallback and candidate_idx + 1 < len(candidates):
+                next_p = candidates[candidate_idx + 1]
+                skip_msg = (
+                    f"{cfg.provider_label(candidate_provider)} tidak mendukung interval '{unsupported_interval}'. "
+                    f"Melewati dan beralih ke {cfg.provider_label(next_p)}..."
+                )
+                warnings.append(skip_msg)
+                _warn(skip_msg)
+                continue
+            raise ConfigError(
+                f"Provider '{cfg.provider_label(candidate_provider)}' does not support the "
+                f"interval '{unsupported_interval}'."
+            )
+
+        fetcher = _build_fetcher(
+            candidate_provider,
+            active_config,
+            offline_mode=offline_mode,
+            offline_htf=offline_htf,
+            offline_mtf=offline_mtf,
+            offline_ltf=offline_ltf,
+            key=key,
+            token=token,
+            account_id=account_id,
             oanda_env=oanda_env,
         )
 
-    # exchangeInfo is fetched once: it validates the symbol, yields the
-    # PRICE_FILTER.tickSize for tick-precise price rendering (#9) and carries
-    # the listing status surfaced as a non-TRADING warning (#9/#14).
-    symbol_entry = fetcher.validate_symbol()
-
-    tick_size = _extract_tick_size(symbol_entry)
-    config = replace(
-        config,
-        price_format=cfg.PriceFormat(cfg.decimals_from_tick_size(tick_size)),
-    )
-
-    status = symbol_entry.get("status")
-    if isinstance(status, str) and status and status != "TRADING":
-        warnings.append(SymbolStatusWarning(config.symbol, status).message())
-
-    # Prefer the provider's own clock over the host clock for the closure
-    # decision so a skewed local clock cannot inject a half-open candle (#8).
-    # The fetcher exposes an injectable ``now`` seam; rebind it to the fixed
-    # instant. The FX providers expose no clock endpoint and return the host
-    # clock directly (by design), so this path is only a WARN for Binance.
-    server_time: datetime | None = None
-    if offline_mode:
-        # Offline mode derives ``now`` from the CSV (max close_time + 1s), so
-        # GENERATED_AT_UTC is a deterministic function of the input file and no
-        # host clock / network is consulted.
-        server_time = fetcher.fetch_server_time()
-    else:
         try:
-            server_time = fetcher.fetch_server_time()
-        except NetworkError as exc:
-            _warn(
-                f"{config.provider_label} server time unavailable ({exc}); "
-                f"falling back to the host clock for candle-closure and "
-                f"GENERATED_AT_UTC."
+            # 1. Validasi simbol & presisi harga
+            symbol_entry = fetcher.validate_symbol()
+            tick_size = _extract_tick_size(symbol_entry)
+            active_config = replace(
+                active_config,
+                price_format=cfg.PriceFormat(cfg.decimals_from_tick_size(tick_size)),
             )
-    if server_time is not None:
-        fetcher = fetcher.with_now(server_time)
+
+            status = symbol_entry.get("status")
+            candidate_warnings: list[str] = []
+            if isinstance(status, str) and status and status != "TRADING":
+                candidate_warnings.append(SymbolStatusWarning(active_config.symbol, status).message())
+
+            # 2. Sinkronisasi jam server
+            server_time: datetime | None = None
+            if offline_mode:
+                server_time = fetcher.fetch_server_time()
+            else:
+                try:
+                    server_time = fetcher.fetch_server_time()
+                except NetworkError as exc:
+                    _warn(
+                        f"{active_config.provider_label} server time unavailable ({exc}); "
+                        f"falling back to the host clock for candle-closure and "
+                        f"GENERATED_AT_UTC."
+                    )
+            if server_time is not None:
+                fetcher = fetcher.with_now(server_time)
+
+            # 3. Penarikan candle & harga sesuai mode
+            if candles_only:
+                fetch_limit = min(review_candles + 20, cfg.FETCH_LIMIT_MAX)
+                raw_candles = fetcher.fetch_klines(review_interval, fetch_limit)
+                acquired_data = _AcquiredMarketData(
+                    mode="candles_only",
+                    fetcher=fetcher,
+                    active_config=active_config,
+                    server_time=server_time,
+                    candidate_warnings=candidate_warnings,
+                    raw_candles=raw_candles,
+                )
+            elif validate_setup:
+                fetch_limit = min(validate_candles + 20, cfg.FETCH_LIMIT_MAX)
+                raw_candles = fetcher.fetch_klines(validate_interval, fetch_limit)
+                acquired_data = _AcquiredMarketData(
+                    mode="validate_setup",
+                    fetcher=fetcher,
+                    active_config=active_config,
+                    server_time=server_time,
+                    candidate_warnings=candidate_warnings,
+                    raw_candles=raw_candles,
+                )
+            else:
+                htf_raw = fetcher.fetch_klines(active_config.htf_interval, active_config.htf_fetch_limit)
+                mtf_raw = fetcher.fetch_klines(active_config.mtf_interval, active_config.mtf_fetch_limit)
+                ltf_raw = fetcher.fetch_klines(active_config.ltf_interval, active_config.ltf_fetch_limit)
+
+                ltf_closed = [candle for candle in ltf_raw if candle.is_closed]
+                ltf_atr: Decimal | None = None
+                if len(ltf_closed) >= active_config.atr_period + 1:
+                    ltf_atr = compute_atr(ltf_closed, active_config.atr_period)
+                reference_candle = ltf_closed[-1] if ltf_closed else None
+
+                current_price = fetcher.fetch_current_price(
+                    reference_candle=reference_candle, tolerance=ltf_atr
+                )
+                acquired_data = _AcquiredMarketData(
+                    mode="prompt",
+                    fetcher=fetcher,
+                    active_config=active_config,
+                    server_time=server_time,
+                    candidate_warnings=candidate_warnings,
+                    htf_raw=htf_raw,
+                    mtf_raw=mtf_raw,
+                    ltf_raw=ltf_raw,
+                    ltf_atr=ltf_atr,
+                    reference_candle=reference_candle,
+                    current_price=current_price,
+                )
+
+            if is_fallback:
+                warn_msg = (
+                    f"Koneksi jaringan ke {cfg.provider_label(config.provider)} gagal. "
+                    f"Berhasil beralih otomatis ke {cfg.provider_label(candidate_provider)}."
+                )
+                warnings.append(warn_msg)
+            config = active_config
+            warnings.extend(candidate_warnings)
+            break
+
+        except NetworkError as exc:
+            last_network_exc = exc
+            if candidate_idx + 1 < len(candidates):
+                next_p = candidates[candidate_idx + 1]
+                _warn(
+                    f"Koneksi jaringan ke {cfg.provider_label(candidate_provider)} gagal ({exc}). "
+                    f"Mengalihkan otomatis ke {cfg.provider_label(next_p)}..."
+                )
+                continue
+            raise
+
+    if acquired_data is None:
+        if last_network_exc is not None:
+            raise last_network_exc
+        raise NetworkError("Semua exchange dalam rantai failover tidak dapat dihubungi.")
 
     # Post-trade review / candles-only fast-path
-    if candles_only:
+    if acquired_data.mode == "candles_only":
         for message in warnings:
             _warn(message)
 
-        fetch_limit = min(review_candles + 20, cfg.FETCH_LIMIT_MAX)
-        raw_candles = fetcher.fetch_klines(review_interval, fetch_limit)
+        raw_candles = acquired_data.raw_candles
         closed_candles = [c for c in raw_candles if c.is_closed]
 
         if len(closed_candles) < review_candles:
@@ -644,7 +818,7 @@ def run(
                 f"No closed candles available for {config.symbol} at {review_interval}."
             )
 
-        generated_at = server_time or datetime.now(timezone.utc)
+        generated_at = acquired_data.server_time or datetime.now(timezone.utc)
         journal = TradeJournalSpec(
             direction=inferred_direction or direction,
             entry_price=Decimal(str(entry)) if entry is not None else None,
@@ -690,12 +864,11 @@ def run(
         )
 
     # Setup validation fast-path
-    if validate_setup:
+    if acquired_data.mode == "validate_setup":
         for message in warnings:
             _warn(message)
 
-        fetch_limit = min(validate_candles + 20, cfg.FETCH_LIMIT_MAX)
-        raw_candles = fetcher.fetch_klines(validate_interval, fetch_limit)
+        raw_candles = acquired_data.raw_candles
         closed_candles = [c for c in raw_candles if c.is_closed]
 
         if len(closed_candles) < validate_candles:
@@ -732,7 +905,7 @@ def run(
         )
 
         analysis = analyze_setup(setup_spec, selected_candles)
-        generated_at = server_time or datetime.now(timezone.utc)
+        generated_at = acquired_data.server_time or datetime.now(timezone.utc)
 
         validation_text = render_validation_prompt(
             setup=setup_spec,
@@ -769,24 +942,16 @@ def run(
             tuple(warnings),
         )
 
-    htf_raw = fetcher.fetch_klines(config.htf_interval, config.htf_fetch_limit)
-    mtf_raw = fetcher.fetch_klines(config.mtf_interval, config.mtf_fetch_limit)
-    ltf_raw = fetcher.fetch_klines(config.ltf_interval, config.ltf_fetch_limit)
+    # Prompt Mode
+    fetcher = acquired_data.fetcher
+    server_time = acquired_data.server_time
+    htf_raw = acquired_data.htf_raw
+    mtf_raw = acquired_data.mtf_raw
+    ltf_raw = acquired_data.ltf_raw
+    ltf_atr = acquired_data.ltf_atr
+    reference_candle = acquired_data.reference_candle
+    current_price = acquired_data.current_price
 
-    # Current-price sanity (#13): cross-check the ticker against the last closed
-    # LTF candle's [low, high] ± 1 × LTF ATR. The tolerance uses the same ATR
-    # driving the swing filter, so no extra indicator is introduced.
-    # NOTE: the price-sanity band is intentionally LTF-only; MTF is excluded so
-    # the ticker cross-check and closed-candle fallback stay on the finest tier.
-    ltf_closed = [candle for candle in ltf_raw if candle.is_closed]
-    ltf_atr: Decimal | None = None
-    if len(ltf_closed) >= config.atr_period + 1:
-        ltf_atr = compute_atr(ltf_closed, config.atr_period)
-    reference_candle = ltf_closed[-1] if ltf_closed else None
-
-    current_price = fetcher.fetch_current_price(
-        reference_candle=reference_candle, tolerance=ltf_atr
-    )
     warnings.extend(fetcher.price_notes)
     price_warning = price_sanity_warning(
         current_price,
@@ -922,7 +1087,7 @@ def run(
     context_settings={"help_option_names": ["-h", "--help"]},
     help=(
         "Generate a mechanical SMC/ICT [FAKTA] prompt payload from read-only "
-        "public market data (Binance / Bitunix / Twelve Data / OANDA). Useful for "
+        "public market data (Binance / Bitunix / MEXC / Gate.io / Twelve Data / OANDA). Useful for "
         "crypto and FX/metals. Run without arguments or with -i for Interactive Mode. "
         "No LLM calls, no reasoning, no trading."
     ),
@@ -942,8 +1107,8 @@ def run(
     default=cfg.PROVIDER_BINANCE,
     show_default=True,
     help=(
-        "Data provider. Binance and Bitunix serve crypto; Twelve Data and OANDA "
-        "serve spot FX/metals (XAUUSD)."
+        "Data provider. Binance, Bitunix, MEXC, and Gate.io serve crypto futures; "
+        "Twelve Data and OANDA serve spot FX/metals (XAUUSD)."
     ),
 )
 @click.option(
@@ -1290,6 +1455,13 @@ def run(
         "stray local file cannot change the run."
     ),
 )
+@click.option(
+    "--no-fallback",
+    "no_fallback",
+    is_flag=True,
+    default=False,
+    help="Nonaktifkan pengalihan otomatis antar-exchange (Strict Provider Mode).",
+)
 @click.option("--debug", is_flag=True, default=False, help="Print stack traces.")
 @click.version_option(version=__version__, prog_name=PROG)
 def main(
@@ -1337,6 +1509,7 @@ def main(
     validate_candles: int,
     env_file: str | None,
     no_dotenv: bool,
+    no_fallback: bool,
     debug: bool,
 ) -> None:
     """CLI entrypoint. Parses args, then delegates to :func:`run` or :func:`run_interactive_wizard`."""
@@ -1407,6 +1580,7 @@ def main(
             filled=filled,
             validate_interval=validate_interval,
             validate_candles=validate_candles,
+            no_fallback=no_fallback,
         )
     except SmcPromptError as exc:
         _error(str(exc))

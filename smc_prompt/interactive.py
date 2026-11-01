@@ -62,8 +62,10 @@ def run_interactive_wizard() -> None:
 
         # Step 1: Pilih Sumber Data (Data Provider)
         provider_options = [
-            (cfg.PROVIDER_BINANCE, "Binance Futures (Crypto USDT-M, tanpa API key)"),
+            (cfg.PROVIDER_BINANCE, "Binance Futures (Crypto USDT-M, otomatis fallback jika terblokir)"),
             (cfg.PROVIDER_BITUNIX, "Bitunix Futures (Crypto USDT-M, tanpa API key)"),
+            (cfg.PROVIDER_MEXC, "MEXC Futures (Crypto USDT-M, tanpa API key)"),
+            (cfg.PROVIDER_GATE, "Gate.io Futures (Crypto USDT-M, tanpa API key)"),
             (cfg.PROVIDER_TWELVEDATA, "Twelve Data (Spot Forex & Logam Mulia seperti XAUUSD)"),
             (cfg.PROVIDER_OANDA, "OANDA (Spot Forex & Logam Mulia seperti XAUUSD)"),
             ("csv", "Offline CSV (Membaca file data lokal di komputer)"),
