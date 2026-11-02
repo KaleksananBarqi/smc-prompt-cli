@@ -1,12 +1,12 @@
 # smc-prompt
 
 `smc-prompt` adalah **CLI Python sekali-jalan (single-run)** yang mengambil data
-OHLC dari **provider market data publik read-only** (Binance Spot secara default;
-Twelve Data atau OANDA untuk FX/logam), menghitung **fakta struktural yang
-objektif dan mekanis** (lapisan `[FAKTA]`), menyuntikkan fakta tersebut ke dalam
-template prompt yang tetap, lalu **menulis prompt akhir ke berkas `.md` di
-`./output`**, **menyalinnya ke clipboard** (best-effort), dan opsional
-**mencetaknya ke terminal** lewat `--stdout`.
+OHLC dari **provider market data publik read-only** (Binance, Bitunix, MEXC, dan
+Gate.io USDT-M Futures secara publik tanpa API key; Twelve Data atau OANDA untuk FX/logam),
+menghitung **fakta struktural yang objektif dan mekanis** (lapisan `[FAKTA]`),
+menyuntikkan fakta tersebut ke dalam template prompt yang tetap, lalu
+**menulis prompt akhir ke berkas `.md` di `./output`**, **menyalinnya ke clipboard**
+(best-effort), dan opsional **mencetaknya ke terminal** lewat `--stdout`.
 
 Alat ini adalah **utilitas penyiapan data (data-preparation utility)** untuk LLM
 teks di hilir. Ia **tidak melakukan penalaran apa pun** sendiri; seluruh
@@ -14,7 +14,7 @@ interpretasi non-trivial (DOL, liquidity sweep, bias, konfirmasi entry)
 didelegasikan sepenuhnya kepada LLM yang membaca prompt.
 
 > Dokumentasi desain lengkap dan beku (frozen) tersedia di
-> [`docs/DESIGN_SPEC.md`](docs/DESIGN_SPEC.md).
+> [`docs/DESIGN_SPEC.md`](docs/DESIGN_SPEC.md) dan keputusan arsitektur di [`docs/adr/`](docs/adr/).
 
 ---
 
@@ -23,10 +23,10 @@ didelegasikan sepenuhnya kepada LLM yang membaca prompt.
 Ada tiga alasan praktis di balik `smc-prompt`:
 
 1. **Murah — SMC murni cukup dengan data publik.** Analisis Smart Money
-   Concepts yang mekanis (swing, struktur, equal highs/lows, FVG) hanya
+   Concepts yang mekanis (swing, struktur, equal highs/lows, FVG, order block) hanya
    membutuhkan **OHLCV**. Tidak ada kebutuhan data eksotis seperti order flow,
-   footprint, likuiditas berbayar, atau feed institusional. **Binance public
-   REST API** menyediakan seluruh data yang diperlukan **tanpa API key** dan
+   footprint, likuiditas berbayar, atau feed institusional. **Public REST API
+   crypto futures (Binance, Bitunix, MEXC, Gate.io)** menyediakan seluruh data yang diperlukan **tanpa API key** dan
    **tanpa biaya** — cukup menarik data publik, selesai.
 
 2. **Tanpa API AI berbayar.** Tool ini **tidak memanggil LLM API apa pun** dan
@@ -45,6 +45,10 @@ tinggal menjalankan satu perintah lalu menempelkan hasilnya ke LLM mana pun.
 
 ## Fitur Utama
 
+- **Crypto Failover Chain & Ketahanan Multi-Exchange:** Pengalihan otomatis berurutan antar-exchange kripto publik (`binance` ➔ `bitunix` ➔ `mexc` ➔ `gate`) saat terjadi kegagalan jaringan atau pemblokiran ISP lokal (`NetworkError` seperti DNS block / TrustPositif / timeout / HTTP 451 / HTTP 403). Seluruh data ditarik ulang secara atomik (*clean cutover*) per exchange untuk mencegah percampuran candle. Dilengkapi opsi *Strict Provider Mode* (`--no-fallback`) jika ingin memaksakan eksekusi hanya pada exchange yang diminta.
+- **Dukungan 4 Bursa Kripto USDT-M Futures Tanpa API Key:** Mengambil data candlestick dan harga live publik langsung dari **Binance Futures**, **Bitunix Futures**, **MEXC Futures**, dan **Gate.io Futures** secara gratis dan instan tanpa perlu akun atau API key.
+- **Normalisasi Simbol Kontrak Otomatis:** Input simbol standar (mis. `BTCUSDT`, `ETHUSDT`) otomatis diterjemahkan ke format kontrak bursa masing-masing (mis. `BTC_USDT` untuk MEXC dan Gate.io).
+- **Penanganan Cerdas Ketidakcocokan Interval (Interval Skipping):** Jika exchange cadangan di tengah rantai tidak mendukung interval tertentu (misal interval `2h` pada MEXC), sistem otomatis melompati exchange tersebut dengan peringatan (*warning*) dan melanjutkan ke exchange berikutnya (Gate.io).
 - **Optimasi & Kompresi Token Output Prompt:** Output prompt dirancang hemat token (~3.000–4.000 token, terpangkas >65% dari prompt lama yang mencapai ~13.000 token) tanpa mengurangi akurasi indikator Layer-A. Slicing candle mentah default menggunakan *Render Tail* (HTF 20, MTF 30, LTF 40 candle terakhir), volume integer rounding, compact timestamp (`MM-DD` / `MM-DD HH:MM`), label singkat (`SH`/`SL`, `BULL`/`BEAR`), dan deduplikasi referensi level. Tersedia flag `--full-candles` jika membutuhkan seluruh baris histori candle.
 - **Dua lapisan payload** yang disuntikkan ke prompt:
   - **Layer A — Computed Summary:** harga saat ini, swing high/low terdeteksi
@@ -85,7 +89,7 @@ tinggal menjalankan satu perintah lalu menempelkan hasilnya ke LLM mana pun.
   `--stdout` menambahkan cetak ke stdout. Jika clipboard tidak tersedia
   (lingkungan headless), itu hanya peringatan (exit 0).
 - **Tiga timeframe native (3-tier)** — satu kali jalan mengambil, menganalisis,
-  dan merender **tiga seri** (HTF + MTF + LTF; default `1d` / `4h` / `1h`) ke
+  dan merender **tiga seri** (HTF + MTF + LTF; default `4h` / `1h` / `15m`) ke
   dalam satu prompt. Tier MTF adalah instance ketiga melalui pipeline
   `analyze()` yang sama; `TimeframeAnalysis` tidak berubah.
 - **Mode offline / data lokal (Phase 4)** — `--input-csv` (opsional
@@ -101,14 +105,14 @@ tinggal menjalankan satu perintah lalu menempelkan hasilnya ke LLM mana pun.
 - **`--dry-run` (Phase 5, #16)** — validasi konfigurasi + simbol lalu cetak
   pengaturan yang diresolusi ke **stderr**, tanpa fetch klines, render, atau
   menulis berkas (cocok untuk CI/pre-flight).
-- **Dukungan XAUUSD / FX-logam (Phase 6)** — Binance Spot **tidak melisting**
+- **Dukungan XAUUSD / FX-logam (Phase 6)** — Binance Futures **tidak melisting**
   instrumen fiat/forex/logam, sehingga XAUUSD tidak bisa diambil dari Binance.
   Provider `twelvedata` (key gratis, **4h native**) dan `oanda` (akun practice
   gratis, spot `XAU_USD` asli, `H4` native) menyajikan pair/logam sungguhan.
   Pipeline analisis **tidak berubah**: provider hanyalah sumber data lain dengan
   kontrak yang sama (`validate_symbol` / `fetch_klines` / `fetch_current_price` /
   `fetch_server_time` / `price_notes` / `with_now`).
-- **Tanpa API key untuk Binance**, hanya endpoint **read-only public market data**
+- **Tanpa API key untuk Binance, Bitunix, MEXC, dan Gate.io**, hanya endpoint **read-only public market data**
   (provider FX opsional memerlukan key/token; lihat bagian XAUUSD di bawah).
 
 ## Non-Goals (batas keras)
@@ -213,7 +217,8 @@ dan [`smc_prompt/config.py`](smc_prompt/config.py).
 |---|---|---|---|
 | `SYMBOL` | positional `str` | `None` (opsional) | Simbol instrumen (mis. `BTCUSDT`, `ETHUSDT` untuk crypto; `XAUUSD` untuk FX/logam). Jika tidak diisi, otomatis meluncurkan **Terminal Interactive Mode**. |
 | `-i`, `--interactive` | flag | off | **Terminal Interactive Mode.** Menjalankan panduan interaktif ramah pengguna langkah-demi-langkah (pilih provider, ticker, aksi) dengan smart defaults untuk timeframe. |
-| `--provider` | pilihan: `binance` \| `bitunix` \| `twelvedata` \| `oanda` | `binance` | Sumber data market data. `binance` dan `bitunix` untuk crypto (USDT-M Futures); `twelvedata` dan `oanda` untuk spot FX dan logam mulia (`XAUUSD`). |
+| `--provider` | pilihan: `binance` \| `bitunix` \| `mexc` \| `gate` \| `twelvedata` \| `oanda` | `binance` | Sumber data market data. `binance`, `bitunix`, `mexc`, dan `gate` untuk crypto (USDT-M Futures publik tanpa API key); `twelvedata` dan `oanda` untuk spot FX dan logam mulia (`XAUUSD`). |
+| `--no-fallback` | flag | off | **Strict Provider Mode.** Nonaktifkan rantai pengalihan otomatis antar-exchange crypto (`binance` ➔ `bitunix` ➔ `mexc` ➔ `gate`). Gagal seketika (*fail-fast*) jika exchange yang diminta mengalami error jaringan. |
 | `--htf-interval` | interval Binance | `4h` | Interval kline Binance untuk seri HTF. Nilai valid: `1m,3m,5m,15m,30m,1h,2h,4h,6h,8h,12h,1d,3d,1w,1M`. Nilai di luar daftar ditolak dengan exit code `2`. |
 | `--mtf-interval` | interval Binance | `1h` | Interval kline Binance untuk seri MTF (medium). Daftar nilai valid sama dengan `--htf-interval`. Harus berbeda dari dua tier lainnya. |
 | `--ltf-interval` | interval Binance | `15m` | Interval kline Binance untuk seri LTF. Daftar nilai valid sama dengan `--htf-interval`. Harus berbeda dari dua tier lainnya. |
@@ -236,6 +241,9 @@ dan [`smc_prompt/config.py`](smc_prompt/config.py).
 | `--candles-only` (atau `--review`) | flag | off | **Mode Post-Trade Review.** Hanya mengekspor data candle mentah (OHLCV) dan ringkasan pergerakan harga sesi ke berkas `.md` tanpa menyertakan template prompt analisis SMC pre-trade. |
 | `--review-interval` | interval Binance | `1h` | Interval candle untuk mode review (misal `15m`, `1h`, `4h`). |
 | `--review-candles` | `int` (5–500) | `30` | Jumlah candle closed yang diekspor pada mode review. |
+| `--outcome` (atau `--trade-result`) | pilihan: `hit tp` \| `hit sl` \| `be` \| `cut manual` | — | Hasil trade untuk formulir checklist jurnal review pasca-trade: `'Hit TP'`, `'Hit SL'`, `'BE'`, `'Cut Manual'`. |
+| `--exit-price` (atau `--exit`, `--hit-price`) | `float` | — | Level harga exit/hit aktual untuk menghitung Realized PnL (points) dan R-Multiple pada jurnal review. |
+| `--notes` (atau `--review-notes`) | `str` | — | Catatan evaluasi/jurnal kustom untuk mode review pasca-trade. |
 | `--validate-setup` (atau `--check-setup`) | flag | off | **Validasi Setup & Deteksi Front-Run.** Menghasilkan prompt terfokus untuk mengevaluasi apakah limit order/setup yang direncanakan masih valid, sudah ter-front-run, tersapu targetnya, atau sudah terjemput. **Wajib** menyertakan status order via `--unfilled` / `--filled` (atau `--order-status`). |
 | `--unfilled` | flag | off | **Kewajiban Status Order:** Menegaskan bahwa limit order masih pending di orderbook dan **belum terisi/terjemput**. Mencegah LLM berhalusinasi menganggap posisi sudah rugi/kena SL berdasarkan candle masa lalu. |
 | `--filled` | flag | off | **Kewajiban Status Order:** Menegaskan bahwa posisi **sudah terisi/terjemput** dan sedang aktif berjalan di pasar untuk evaluasi manajemen trade. |
@@ -261,16 +269,32 @@ dan [`smc_prompt/config.py`](smc_prompt/config.py).
 
 Kedua mode terimplementasi penuh; default adalah `nearest`.
 
-### Failover Host
+### Ketahanan Jaringan: Failover Host & Crypto Failover Chain
 
-CLI mencoba host secara berurutan dan berpindah (failover) saat connection
-error, HTTP 451 (geo-block), dan HTTP 403:
+Untuk menjamin keandalan penarikan data publik tanpa terhambat pemblokiran ISP lokal (seperti TrustPositif / DNS block / Internet Baik) atau gangguan jaringan server, `smc-prompt` menerapkan dua lapis sistem failover:
 
-1. `https://fapi.binance.com`
+#### 1. Crypto Failover Chain (Antar-Exchange Publik)
 
-Memberikan `--base-url` akan menempatkan host tersebut di urutan pertama,
-diikuti host fallback yang tersisa (host yang sama tidak diduplikasi). Daftar
-host tersimpan di [`smc_prompt/config.py`](smc_prompt/config.py) sebagai
+Secara default saat mengeksekusi simbol kripto, jika terjadi kegagalan jaringan (`NetworkError`, connection timeout, HTTP 451 geo-block, atau HTTP 403), CLI akan otomatis mengalihkan penarikan data ke exchange berikutnya secara berurutan:
+
+```
+Binance Futures ➔ Bitunix Futures ➔ MEXC Futures ➔ Gate.io Futures
+```
+
+Karakteristik penting Crypto Failover Chain:
+- **Atomisitas Data (*Clean Cutover*):** Bila terjadi kegagalan jaringan di tengah penarikan data (mis. setelah validasi simbol atau setelah menarik HTF), seluruh proses dibatalkan dan diulang utuh dari awal pada exchange berikutnya. Candle antar-exchange **tidak pernah dicampur**.
+- **Pemicu Terbatas:** Failover **hanya** dipicu oleh kendala jaringan (`NetworkError`). Kesalahan input simbol (`SymbolNotFoundError`) atau kesalahan konfigurasi (`ConfigError`) **tidak** memicu failover agar kesalahan pengetikan segera diketahui pengguna (*fail-fast*).
+- **Penanganan Ketidakcocokan Interval (*Interval Skipping*):** Jika exchange cadangan di tengah rantai tidak mendukung interval yang diminta (mis. interval `2h` didukung Binance dan Gate.io tetapi tidak didukung MEXC), sistem otomatis melewati MEXC dengan pesan *warning* dan melanjutkan ke Gate.io.
+- **Strict Provider Mode (`--no-fallback`):** Jika Anda ingin membatasi penarikan data secara ketat hanya pada satu exchange tanpa failover otomatis, tambahkan flag `--no-fallback`.
+- **Pencatatan Metadata Provenance:** Header output Markdown (`output/<file>.md`) selalu mencatat nama exchange aktual yang sukses ditarik datanya (`Provider: Binance / Bitunix / MEXC / Gate.io`).
+
+#### 2. Failover Host Internal Binance
+Untuk provider Binance (`binance`), CLI mencoba host secara berurutan dan berpindah (failover) saat connection error, HTTP 451 (geo-block), dan HTTP 403:
+
+1. Host override via `--base-url` (bila diberikan)
+2. `https://fapi.binance.com` (host default)
+
+Daftar host tersimpan di [`smc_prompt/config.py`](smc_prompt/config.py) sebagai
 konstanta `DEFAULT_BASE_URLS`.
 
 ### Format Output
@@ -314,7 +338,8 @@ konstanta `DEFAULT_BASE_URLS`.
 
 ### Examples
 
-Bagian ini berisi contoh siap-tempel (copy-paste) untuk skenario umum. Semua
+Bagian ini berisi contoh siap-tempel (copy-paste) untuk skenario umum.
+
 #### 0. Mode Terminal Interaktif (Interactive Wizard)
 
 Jika Anda tidak ingin menghafal perintah atau opsi one-liner, cukup jalankan `smc-prompt` tanpa argumen apa pun (atau gunakan flag `-i`):
@@ -326,7 +351,7 @@ smc-prompt -i
 ```
 
 CLI akan memandu Anda langkah-demi-langkah:
-1. Memilih asal data (Binance, Bitunix, Twelve Data, OANDA, atau CSV lokal).
+1. Memilih asal data (Binance, Bitunix, MEXC, Gate.io, Twelve Data, OANDA, atau CSV lokal).
 2. Memilih simbol/ticker (mis. `BTCUSDT`, `ETHUSDT`, `XAUUSD`).
 3. Memilih tindakan (Generate Prompt SMC/ICT, Review Pasca-Trade, atau Validasi Setup).
 4. **Smart Defaults Timeframe:** Cukup tekan `ENTER` untuk menyetujui paket timeframe standar tanpa perlu mengetik ulang!
@@ -339,10 +364,44 @@ Mengambil data candlestick dan harga live langsung dari exchange **Bitunix Futur
 smc-prompt BTCUSDT --provider bitunix
 ```
 
+#### 0c. Mengambil data dari MEXC Futures (USDT-M)
+
+Mengambil data candlestick dan harga live langsung dari exchange **MEXC Futures** secara publik tanpa API key (simbol `BTCUSDT` otomatis dinormalisasi menjadi kontrak `BTC_USDT`):
+
+```bash
+smc-prompt BTCUSDT --provider mexc
+```
+
+#### 0d. Mengambil data dari Gate.io Futures (USDT-M)
+
+Mengambil data candlestick dan harga live langsung dari exchange **Gate.io Futures** secara publik tanpa API key:
+
+```bash
+smc-prompt BTCUSDT --provider gate
+```
+
+#### 0e. Pengalihan Otomatis Failover Kripto (Anti-Blokir ISP)
+
+Secara default, jika endpoint Binance mengalami gangguan jaringan atau pemblokiran ISP lokal (TrustPositif / Internet Baik), sistem otomatis mengalihkan penarikan data ke Bitunix, lalu MEXC, lalu Gate.io tanpa interupsi manual:
+
+```bash
+# Otomatis failover: Binance ➔ Bitunix ➔ MEXC ➔ Gate.io
+smc-prompt BTCUSDT
+```
+
+#### 0f. Strict Provider Mode (--no-fallback)
+
+Jika Anda ingin menonaktifkan pengalihan otomatis dan memastikan eksekusi hanya berjalan pada exchange yang diminta:
+
+```bash
+# Gagal seketika jika Binance terblokir, tidak beralih ke Bitunix/MEXC/Gate
+smc-prompt BTCUSDT --provider binance --no-fallback
+```
+
 #### 1. Menjalankan standar (default) pada BTCUSDT (Binance Futures)
 
-Menghasilkan prompt dengan 60 candle daily HTF, 100 candle hourly LTF,
-`--swing-lookback 5`, referensi jarak `nearest`, dan ATR(14) aktif.
+Menghasilkan prompt dengan 3-tier timeframe native (default HTF `4h` [90 candle closed], MTF `1h` [186 candle closed], LTF `15m` [192 candle closed]),
+`--swing-lookback 5`, referensi jarak `nearest`, ATR(14) aktif, dan render tail hemat token.
 
 ```bash
 smc-prompt BTCUSDT
@@ -679,37 +738,60 @@ Keluaran yang diharapkan:
 
 ---
 
-## Provider Data: Binance, Twelve Data, dan OANDA (Phase 6)
+## Provider Data: Binance, Bitunix, MEXC, Gate.io, Twelve Data, dan OANDA
 
 ### Kenapa XAUUSD tidak bisa diambil dari Binance
 
-Binance Spot **tidak melisting** instrumen fiat/forex/logam. `GET
-/api/v3/exchangeInfo?symbol=XAUUSD` mengembalikan `symbols: []` dan `GET
-/api/v3/klines?symbol=XAUUSD` mengembalikan HTTP 400, sehingga keduanya berujung
-`SymbolNotFoundError` (exit `3`). Ini masalah **instrumen**, bukan host — jadi
+Binance Futures (maupun bursa kripto lainnya) **tidak melisting** instrumen fiat/forex/logam riil. `GET
+/fapi/v1/exchangeInfo` tidak memuat pasangan `XAUUSD`, sehingga pencarian instrumen ini pada provider kripto berujung
+`SymbolNotFoundError` (exit `3`). Ini masalah ketiadaan **instrumen**, bukan masalah host atau koneksi — sehingga
 `--base-url` tidak bisa menolong.
 
-**Jangan memakai `XAUTUSDT`/`PAXGUSDT` sebagai pengganti.** Itu token emas, bukan
+**Jangan memakai `XAUTUSDT`/`PAXGUSDT` sebagai pengganti.** Itu token emas kripto, bukan
 spot gold:
 
 - **Premium/diskon persisten** terhadap XAU/USD spot — inilah selisih "beberapa
   point" yang terlihat.
 - **Mikrostruktur crypto** (orderbook tipis, wick dari trade token besar, drift
-  peg USDT/USD) → memunculkan **swing dan FVG hantu** yang tidak ada di pasar gold.
-- **Sesi berbeda** — gold spot tutup akhir pekan, Binance 24/7; boundary candle
+  peg USDT/USD) → memunculkan **swing dan FVG hantu** yang tidak ada di pasar gold riil.
+- **Sesi berbeda** — gold spot tutup akhir pekan, bursa kripto buka 24/7; boundary candle
   `1d` pun bergeser (00:00 UTC vs 21:00/22:00 UTC), sehingga timestamp swing dan
   ambang EQH/EQL ikut bergeser.
 
 ### Provider yang tersedia
 
-| Provider | `--provider` | Instrumen | 4h native | Volume | Kredensial |
-|---|---|---|---|---|---|
-| Binance Spot | `binance` (default) | crypto | ya | ya | tidak perlu |
-| Twelve Data | `twelvedata` | FX & logam (`XAU/USD`) | ya | tidak (0) | API key gratis |
-| OANDA v20 | `oanda` | FX & logam (`XAU_USD`) | ya | tick count → dinolkan | token (akun practice gratis) |
+| Provider | `--provider` | Instrumen | Pasar / Kontrak | 4h native | Volume | Kredensial |
+|---|---|---|---|---|---|---|
+| Binance Futures | `binance` (default) | crypto | USDT-M Perpetual | ya | ya | tidak perlu (publik) |
+| Bitunix Futures | `bitunix` | crypto | USDT-M Perpetual | ya | ya | tidak perlu (publik) |
+| MEXC Futures | `mexc` | crypto | USDT-M Perpetual | ya | ya | tidak perlu (publik) |
+| Gate.io Futures | `gate` | crypto | USDT-M Perpetual | ya | ya | tidak perlu (publik) |
+| Twelve Data | `twelvedata` | FX & logam (`XAU/USD`) | Spot OTC | ya | tidak (0) | API key gratis |
+| OANDA v20 | `oanda` | FX & logam (`XAU_USD`) | Spot CFD/OTC | ya | tick count → dinolkan | token (akun practice gratis) |
 
-Keduanya menyajikan `4h` **native**, jadi trio default `1d` / `4h` / `1h` dipetakan
-1:1 dan **tidak ada agregasi** yang diperlukan.
+Seluruh provider menyajikan interval `4h` secara **native**, sehingga trio default `4h` / `1h` / `15m` dipetakan
+1:1 tanpa memerlukan resample atau agregasi buatan.
+
+### Pemetaan Simbol Kontrak Kripto & Normalisasi Otomatis
+
+Setiap exchange memiliki konvensi penulisan ticker yang berbeda. `smc-prompt` secara otomatis menormalisasi simbol input Anda melalui `provider_symbol()`:
+
+| Simbol Input | Binance | Bitunix | MEXC (`_`) | Gate.io (`_`) |
+|---|---|---|---|---|
+| `BTCUSDT` | `BTCUSDT` | `BTCUSDT` | `BTC_USDT` | `BTC_USDT` |
+| `ETHUSDT` | `ETHUSDT` | `ETHUSDT` | `ETH_USDT` | `ETH_USDT` |
+| `SOLUSDT` | `SOLUSDT` | `SOLUSDT` | `SOL_USDT` | `SOL_USDT` |
+
+Anda cukup menginputkan format standar `BTCUSDT` atau `ethusdt`, dan sistem akan otomatis menyesuaikan pemisah kontrak untuk MEXC dan Gate.io.
+
+### Dukungan Interval per Exchange Kripto
+
+- **Binance:** `1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 1d, 3d, 1w, 1M`
+- **Bitunix:** `1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 1d, 1w`
+- **MEXC:** `1m, 5m, 15m, 30m, 1h, 4h, 8h, 1d, 1w, 1M`
+- **Gate.io:** `1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 1d, 7d, 1w, 30d`
+
+> **Interval Skipping pada Failover:** Jika Anda menggunakan interval seperti `2h` (didukung Binance dan Gate.io tetapi tidak oleh MEXC), saat terjadi failover dari Binance, sistem secara cerdas melompati MEXC dengan pesan peringatan non-fatal dan langsung mencoba Gate.io. Namun jika pengguna meminta `--provider mexc --htf-interval 2h` secara eksplisit, CLI menerapkan prinsip *fail-fast* dengan `ConfigError` (exit code `2`).
 
 ### Contoh: XAUUSD via Twelve Data
 
@@ -905,16 +987,25 @@ Konstanta penting (`smc_prompt/config.py`):
 
 | Konstanta | Default | Keterangan |
 |---|---|---|
-| `HTF_INTERVAL` | `1d` | Default `--htf-interval` (interval kline Binance untuk HTF). |
-| `LTF_INTERVAL` | `1h` | Default `--ltf-interval` (interval kline Binance untuk LTF). |
+| `HTF_INTERVAL` | `4h` | Default `--htf-interval` (interval kline Binance untuk HTF). |
+| `MTF_INTERVAL` | `1h` | Default `--mtf-interval` (interval kline Binance untuk MTF). |
+| `LTF_INTERVAL` | `15m` | Default `--ltf-interval` (interval kline Binance untuk LTF). |
 | `TIME_PATH` | `/fapi/v1/time` | Endpoint waktu server Binance Futures untuk keputusan candle closed dan `GENERATED_AT_UTC`. |
 | `EXCHANGE_INFO_PATH` | `/fapi/v1/exchangeInfo` | Sumber `PRICE_FILTER.tickSize` (presisi harga) dan `status` simbol. |
 | `MAX_PRICE_DECIMALS` | `8` | Batas atas desimal harga dari tickSize. |
-| `BINANCE_INTERVALS` | `(1m,3m,5m,15m,30m,1h,2h,4h,6h,8h,12h,1d,3d,1w,1M)` | Himpunan interval kline Binance yang valid (dipakai untuk validasi `--htf-interval`/`--ltf-interval`). |
+| `BINANCE_INTERVALS` | `(1m,3m,5m,15m,30m,1h,2h,4h,6h,8h,12h,1d,3d,1w,1M)` | Himpunan interval kline Binance yang valid (dipakai untuk validasi interval). |
 | `INTERVAL_LABELS` | `{1d: Daily, 1h: 1H, 4h: 4H, ...}` | Pemetaan interval → label yang dirender pada judul prosa prompt. |
 | `DEFAULT_BASE_URLS` | `(https://fapi.binance.com,)` | Daftar host fallback yang dapat di-override. |
-| `DEFAULT_HTF_CANDLES` | `60` | Default `--htf-candles`. |
-| `DEFAULT_LTF_CANDLES` | `100` | Default `--ltf-candles`. |
+| `CRYPTO_FAILOVER_CHAIN` | `("binance", "bitunix", "mexc", "gate")` | Rantai prioritas failover otomatis untuk provider crypto publik (USDT-M Futures). |
+| `BITUNIX_HOST` | `https://fapi.bitunix.com` | Host endpoint REST Bitunix Futures default. |
+| `MEXC_HOST` | `https://api.mexc.com` | Host endpoint REST MEXC Futures default. |
+| `GATE_HOST` | `https://api.gateio.ws` | Host endpoint REST Gate.io Futures default. |
+| `DEFAULT_HTF_CANDLES` | `90` | Default `--htf-candles` (jendela kalkulasi HTF). |
+| `DEFAULT_MTF_CANDLES` | `186` | Default `--mtf-candles` (jendela kalkulasi MTF). |
+| `DEFAULT_LTF_CANDLES` | `192` | Default `--ltf-candles` (jendela kalkulasi LTF). |
+| `DEFAULT_HTF_RENDER_CANDLES` | `20` | Jumlah baris candle tail HTF yang dirender ke prompt CSV (hemat token). |
+| `DEFAULT_MTF_RENDER_CANDLES` | `30` | Jumlah baris candle tail MTF yang dirender ke prompt CSV (hemat token). |
+| `DEFAULT_LTF_RENDER_CANDLES` | `40` | Jumlah baris candle tail LTF yang dirender ke prompt CSV (hemat token). |
 | `DEFAULT_SWING_LOOKBACK` | `5` | Default `--swing-lookback`. |
 | `DEFAULT_SWING_MERGE_ATR_MULT` | `0.5` | Pemisahan minimum antar swing sejenis (`× ATR(14)`); lebih dekat akan digabung. |
 | `DEFAULT_ATR_PERIOD` | `14` | Lookback ATR. |
@@ -924,6 +1015,7 @@ Konstanta penting (`smc_prompt/config.py`):
 | `DEFAULT_EQUAL_LEVELS_ATR_MULT` | `0.1` | Toleransi equal highs/lows (`× ATR(14)`) dan penurunan label EQH/EQL. |
 | `DEFAULT_FVG_ATR_MULT` | `0.1` | Ukuran minimum Fair Value Gap (`× ATR(14)`); gap lebih kecil dianggap sub-noise dan dibuang. |
 | `DEFAULT_FVG_TABLE_ROWS` | `8` | Jumlah FVG terbaru yang dirender per tabel timeframe (menjadi `fvg_table_rows`). |
+| `DEFAULT_OB_TABLE_ROWS` | `5` | Jumlah Order Block aktif terbaru yang dirender per tabel timeframe. |
 | `DEFAULT_CONTEXT_BUFFER` | `50` | Candle ekstra yang di-fetch agar swing di tepi kiri tabel tetap terdeteksi. |
 | `FETCH_LIMIT_MAX` | `1000` | Batas keras klines Binance. |
 | `DEFAULT_REQUEST_TIMEOUT` | `10.0` | Timeout per request (detik). |
@@ -938,7 +1030,7 @@ Konstanta penting (`smc_prompt/config.py`):
 | `MIN_SWING_LOOKBACK` | `3` | Minimum window fractal. |
 
 Turunan: `htf_fetch_limit = min(htf_candles + context_buffer, fetch_limit_max)`,
-sama untuk LTF.
+sama untuk MTF dan LTF.
 
 ## Struktur Proyek
 
@@ -946,22 +1038,26 @@ sama untuk LTF.
 smc_prompt/
 ├── __init__.py            # konstanta versi paket
 ├── __main__.py            # memungkinkan `python -m smc_prompt`
-├── cli.py                 # entrypoint Click + orkestrasi (satu-satunya penulis stdout/stderr)
+├── cli.py                 # entrypoint Click + orkestrasi (failover loop & handler)
 ├── config.py              # default imutabel, string interval, aturan format, PriceFormat (tickSize)
 ├── models.py              # dataclass / kontrak payload bertipe
 ├── errors.py              # hierarki exception (memetakan exit code) + warning non-fatal
 ├── data_fetcher.py        # klien REST Binance (klines/ticker/exchangeInfo/time) + retry/backoff + failover
-├── provider_base.py       # scaffolding provider bersama: HTTP retry/failover, timestamp, agregasi, price-band
-├── twelvedata_source.py   # data source Twelve Data (XAU/USD, 4h native)
+├── gate_source.py         # data source Gate.io USDT-M Futures publik (api.gateio.ws)
+├── mexc_source.py         # data source MEXC USDT-M Futures publik (api.mexc.com)
 ├── oanda_source.py        # data source OANDA v20 (XAU_USD, H4 native, flag `complete`)
-├── structure_analyzer.py  # deteksi swing, klasifikasi, jarak, ATR
-├── template_renderer.py   # pembangun placeholder + render Jinja2
 ├── output.py              # tulis berkas .md + salin clipboard (best-effort)
+├── provider_base.py       # scaffolding provider bersama: HTTP retry/failover, timestamp, agregasi, price-band
+├── structure_analyzer.py  # deteksi swing, order block, sweep/BOS, klasifikasi, jarak, ATR
+├── template_renderer.py   # pembangun placeholder + render Jinja2
+├── twelvedata_source.py   # data source Twelve Data (XAU/USD, 4h native)
 └── templates/
     └── prompt_template.j2 # template prompt (byte-frozen)
 
 docs/
-└── DESIGN_SPEC.md         # spesifikasi desain beku
+├── DESIGN_SPEC.md         # spesifikasi desain beku
+└── adr/
+    └── 0001-crypto-provider-failover-chain.md  # ADR failover chain & multi-exchange
 
 pyproject.toml             # metadata paket, dependensi, entry point, extra [dev]
 requirements.txt           # daftar dependensi runtime
@@ -975,9 +1071,9 @@ tanpa mock; jalur data memakai sumber CSV offline). Suite mencakup:
 `detect_swings` (equal highs + tabrakan ATR), `classify_structure`
 (HH/HL, LH/LL, mixed/ranging, equal-levels, kasus < 2 highs), `fmt_distance`
 (sign/magnitudo), `prepare_series` + `InsufficientDataError`, `enforce_alternation`,
-`detect_equal_levels`, `detect_fvg` (bounds/birth_time/filled/sub-noise), derivasi
-`tickSize → desimal`, skema CSV + parity data source, dan satu **golden test**
-yang memakukan hash prompt byte-for-byte.
+`detect_equal_levels`, `detect_fvg` (bounds/birth_time/filled/sub-noise),
+`detect_order_blocks`, `compute_level_status` (wick sweep vs BOS), derivasi
+`tickSize → desimal`, skema CSV + parity data source, serta failover chain multi-exchange.
 
 ```bash
 # Pasang extra dev (pytest) lalu jalankan suite
@@ -989,8 +1085,8 @@ Fixture deterministik ada di `tests/fixtures/` (`htf_daily.csv`,
 `ltf_hourly.csv`). Regenerasi dengan
 `python tests/fixtures/generate_fixtures.py` lalu tinjau diff-nya. Hash golden
 yang dipatok adalah
-`f5a47d8fac567316102faf9a8c19e0a3130d65bb4272b74b0b71f0ebd8bd30c7`
-(`18684` byte). Bila template atau placeholder berubah, regenerasi berkas
+`32d4d2e5cef2658a713bd3a35478824a9664cfc5ce35e14f2b23f93ee3a8b67a`
+(`15617` byte). Bila template atau placeholder berubah, regenerasi berkas
 lalu perbarui `GOLDEN_SHA256`/`GOLDEN_BYTES` di
 [`tests/conftest.py`](tests/conftest.py) setelah meninjau diff byte-for-byte.
 
@@ -1085,8 +1181,8 @@ Setelah render, ukuran prompt dihitung dalam **byte UTF-8**:
 | 0 | Sukses (peringatan mungkin tetap dikeluarkan). |
 | 1 | Error internal tak terduga. |
 | 2 | Argumen / konfigurasi tidak valid. |
-| 3 | Simbol tidak terdaftar di Binance Spot. |
-| 4 | Binance API tidak dapat dijangkau setelah retry. |
+| 3 | Simbol tidak terdaftar di exchange provider yang dipilih. |
+| 4 | Provider API tidak dapat dijangkau setelah retry dan seluruh rantai failover exchange gagal. |
 | 5 | Histori closed tidak cukup untuk menghitung struktur. |
 | 6 | Gagal menulis berkas prompt `.md` output. |
 
@@ -1096,11 +1192,13 @@ Setelah render, ukuran prompt dihitung dalam **byte UTF-8**:
   atau `xclip`/`xsel` tidak terpasang. Ini **hanya peringatan** (exit code tetap
   `0`); berkas prompt sudah tertulis di `--output-dir`; tidak ada tindakan
   tambahan yang diperlukan.
-- **`Symbol '<SYM>' is not listed on Binance Spot` (exit 3)** — periksa ejaan
+- **`Symbol '<SYM>' is not listed ...` (exit 3)** — periksa ejaan
   simbol; gunakan format seperti `BTCUSDT` (base + quote, tanpa pemisah).
-- **`Binance API unreachable ...` (exit 4)** — masalah jaringan atau host
-  terblokir (mis. HTTP 451 geo-block). Coba
-  `--base-url https://data-api.binance.vision`.
+- **`Crypto exchange API unreachable ...` (exit 4)** — masalah jaringan atau host
+  terblokir (mis. DNS block ISP lokal / Internet Baik). Secara default, CLI otomatis
+  mencoba exchange cadangan (**Binance ➔ Bitunix ➔ MEXC ➔ Gate.io**). Bila seluruh
+  rantai tetap gagal atau Anda mengaktifkan `--no-fallback`, periksa koneksi jaringan Anda
+  atau gunakan `--base-url`.
 - **`Not enough closed <tf> history ...` (exit 5)** — histori closed tidak
   mencukupi. Gunakan simbol dengan histori cukup, atau (mode offline) berkas CSV
   dengan lebih banyak baris.
