@@ -576,15 +576,17 @@ def test_trade_plan_requests_named_reasoning(tmp_path: Path) -> None:
     prompt = _offline_prompt(tmp_path)
 
     for marker in (
+        "Status Setup",
         "Alasan Entry",
         "Alasan SL",
+        "Jarak Risiko (1R)",
         "TP1",
         "R multiple TP1",
         "Alasan TP1",
         "TP2",
         "R multiple TP2",
         "Alasan TP2",
-        "RRR aktual (TP1)",
-        "RRR aktual (TP2)",
     ):
         assert marker in prompt
+    assert "RRR aktual (TP1)" not in prompt
+    assert "RRR aktual (TP2)" not in prompt
