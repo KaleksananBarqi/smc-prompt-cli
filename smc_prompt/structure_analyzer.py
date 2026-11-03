@@ -1132,7 +1132,7 @@ def analyze(
 
     reference_facts = build_reference_facts(
         current_price,
-        htf=(timeframe == config.htf_interval),
+        htf=not cfg.is_intraday_interval(timeframe),
         candles=closed,
         swings=swings_with_status,
         rendered_swings=rendered_swings,

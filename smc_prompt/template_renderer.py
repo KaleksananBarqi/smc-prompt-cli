@@ -432,9 +432,13 @@ def build_payload(
     price_format = config.price_format
     fmt = price_format.fmt
 
+    htf_is_daily = not cfg.is_intraday_interval(config.htf_interval)
+    mtf_is_daily = not cfg.is_intraday_interval(config.mtf_interval)
+    ltf_is_daily = not cfg.is_intraday_interval(config.ltf_interval)
+
     htf_swings = _render_swings(
         htf.swings if htf.swings else (htf.swing_high, htf.swing_low),
-        htf=True,
+        htf=htf_is_daily,
         limit=config.swings_table_rows,
         atr=htf.atr,
         equal_mult=config.equal_levels_atr_mult,
@@ -442,8 +446,7 @@ def build_payload(
     )
     mtf_swings = _render_swings(
         mtf.swings if mtf.swings else (mtf.swing_high, mtf.swing_low),
-        # MTF carries a datetime stamp (like LTF), not the HTF date stamp.
-        htf=False,
+        htf=mtf_is_daily,
         limit=config.swings_table_rows,
         atr=mtf.atr,
         equal_mult=config.equal_levels_atr_mult,
@@ -451,7 +454,7 @@ def build_payload(
     )
     ltf_swings = _render_swings(
         ltf.swings if ltf.swings else (ltf.swing_high, ltf.swing_low),
-        htf=False,
+        htf=ltf_is_daily,
         limit=config.swings_table_rows,
         atr=ltf.atr,
         equal_mult=config.equal_levels_atr_mult,
@@ -495,7 +498,7 @@ def build_payload(
         "HTF_INTERVAL_LABEL": config.htf_interval_label,
         "HTF_CANDLE_COUNT": str(len(htf_render)),
         "HTF_CANDLE_TABLE_CSV": render_csv_table(
-            htf_render, htf=True, price_format=price_format
+            htf_render, htf=htf_is_daily, price_format=price_format
         ),
         "HTF_SWINGS_TABLE": htf_swings,
         "HTF_EQUAL_HIGHS": _render_equal_levels(
@@ -506,7 +509,7 @@ def build_payload(
         ),
         "HTF_FVG_TABLE": _render_fvg_table(
             htf.fvgs,
-            htf=True,
+            htf=htf_is_daily,
             limit=config.fvg_table_rows,
             total_candles=(htf.closed_count or htf.candle_count),
             price_format=price_format,
@@ -514,7 +517,7 @@ def build_payload(
         "HTF_FVG_COUNT": str(config.fvg_table_rows),
         "HTF_OB_TABLE": _render_ob_table(
             htf.order_blocks,
-            htf=True,
+            htf=htf_is_daily,
             limit=config.ob_table_rows,
             total_candles=(htf.closed_count or htf.candle_count),
             price_format=price_format,
@@ -528,7 +531,7 @@ def build_payload(
         "MTF_INTERVAL_LABEL": config.mtf_interval_label,
         "MTF_CANDLE_COUNT": str(len(mtf_render)),
         "MTF_CANDLE_TABLE_CSV": render_csv_table(
-            mtf_render, htf=False, price_format=price_format
+            mtf_render, htf=mtf_is_daily, price_format=price_format
         ),
         "MTF_SWINGS_TABLE": mtf_swings,
         "MTF_EQUAL_HIGHS": _render_equal_levels(
@@ -539,7 +542,7 @@ def build_payload(
         ),
         "MTF_FVG_TABLE": _render_fvg_table(
             mtf.fvgs,
-            htf=False,
+            htf=mtf_is_daily,
             limit=config.fvg_table_rows,
             total_candles=(mtf.closed_count or mtf.candle_count),
             price_format=price_format,
@@ -547,7 +550,7 @@ def build_payload(
         "MTF_FVG_COUNT": str(config.fvg_table_rows),
         "MTF_OB_TABLE": _render_ob_table(
             mtf.order_blocks,
-            htf=False,
+            htf=mtf_is_daily,
             limit=config.ob_table_rows,
             total_candles=(mtf.closed_count or mtf.candle_count),
             price_format=price_format,
@@ -561,7 +564,7 @@ def build_payload(
         "LTF_INTERVAL_LABEL": config.ltf_interval_label,
         "LTF_CANDLE_COUNT": str(len(ltf_render)),
         "LTF_CANDLE_TABLE_CSV": render_csv_table(
-            ltf_render, htf=False, price_format=price_format
+            ltf_render, htf=ltf_is_daily, price_format=price_format
         ),
         "LTF_SWINGS_TABLE": ltf_swings,
         "LTF_EQUAL_HIGHS": _render_equal_levels(
@@ -572,7 +575,7 @@ def build_payload(
         ),
         "LTF_FVG_TABLE": _render_fvg_table(
             ltf.fvgs,
-            htf=False,
+            htf=ltf_is_daily,
             limit=config.fvg_table_rows,
             total_candles=(ltf.closed_count or ltf.candle_count),
             price_format=price_format,
@@ -580,7 +583,7 @@ def build_payload(
         "LTF_FVG_COUNT": str(config.fvg_table_rows),
         "LTF_OB_TABLE": _render_ob_table(
             ltf.order_blocks,
-            htf=False,
+            htf=ltf_is_daily,
             limit=config.ob_table_rows,
             total_candles=(ltf.closed_count or ltf.candle_count),
             price_format=price_format,

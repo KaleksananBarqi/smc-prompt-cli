@@ -71,6 +71,208 @@ def test_compact_timestamp_formatting() -> None:
     assert cfg.fmt_ltf_datetime(dt) == "10-29 14:30"
 
 
+@pytest.mark.parametrize(
+    "interval",
+    ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h"],
+)
+def test_is_intraday_interval_true_for_sub_daily(interval: str) -> None:
+    assert cfg.is_intraday_interval(interval) is True
+
+
+@pytest.mark.parametrize(
+    "interval",
+    ["1d", "3d", "7d", "30d", "1w", "1M"],
+)
+def test_is_intraday_interval_false_for_daily_and_above(interval: str) -> None:
+    assert cfg.is_intraday_interval(interval) is False
+
+
+def _make_smc_series() -> list[Candle]:
+    """Susun 20 candle 4h tertutup lengkap dengan fractal swings, FVG unfilled, dan OB aktif."""
+    from datetime import timedelta
+
+    base = datetime(2026, 10, 1, 4, 0, tzinfo=timezone.utc)
+    specs = [
+        # (open, high, low, close)
+        ("100", "102", "98", "101"),
+        ("101", "105", "99", "104"),
+        ("104", "120", "103", "110"),  # Swing HIGH @ i=2
+        ("110", "106", "100", "102"),
+        ("102", "104", "99", "100"),
+        ("100", "103", "80", "85"),    # Swing LOW @ i=5
+        ("85", "95", "90", "94"),
+        ("94", "98", "92", "96"),
+        ("96", "130", "95", "125"),    # Swing HIGH @ i=8
+        ("125", "122", "110", "112"),
+        ("112", "115", "108", "110"),
+        ("110", "112", "85", "90"),    # Swing LOW @ i=11
+        ("90", "100", "92", "98"),
+        ("98", "102", "94", "99"),
+        ("99", "103", "95", "100"),
+        ("100", "104", "96", "101"),
+        ("102", "104", "95", "96"),    # i=16: candle bearish basis untuk OB
+        ("96", "135", "96", "134"),    # i=17: candle displacement
+        ("134", "145", "120", "142"),  # i=18: candle gap -> Bullish FVG [104, 120]
+        ("142", "148", "138", "146"),  # i=19: bertahan di atas FVG & OB
+    ]
+    candles: list[Candle] = []
+    for i, (o, h, l, c) in enumerate(specs):
+        open_t = base + timedelta(hours=4 * i)
+        candles.append(
+            Candle(
+                open_time=open_t,
+                close_time=open_t + timedelta(hours=4),
+                open=Decimal(o),
+                high=Decimal(h),
+                low=Decimal(l),
+                close=Decimal(c),
+                volume=Decimal("100"),
+                is_closed=True,
+            )
+        )
+    return candles
+
+
+def test_intraday_4h_htf_renders_datetime_stamps_across_all_sections() -> None:
+    import re
+    from smc_prompt.structure_analyzer import analyze
+
+    candles = _make_smc_series()
+    config = cfg.build_config(
+        "BTCUSDT",
+        htf_interval="4h",
+        mtf_interval="1h",
+        ltf_interval="15m",
+        price_format=cfg.PriceFormat(tick_decimals=2),
+    )
+    current_price = Decimal("146.00")
+
+    htf_analysis, htf_emitted, _ = analyze(
+        candles,
+        timeframe=config.htf_interval,
+        requested=config.htf_candles,
+        current_price=current_price,
+        config=config,
+    )
+    mtf_analysis, mtf_emitted, _ = analyze(
+        candles,
+        timeframe=config.mtf_interval,
+        requested=config.mtf_candles,
+        current_price=current_price,
+        config=config,
+    )
+    ltf_analysis, ltf_emitted, _ = analyze(
+        candles,
+        timeframe=config.ltf_interval,
+        requested=config.ltf_candles,
+        current_price=current_price,
+        config=config,
+    )
+
+    payload = build_payload(
+        symbol="BTCUSDT",
+        generated_at=datetime(2026, 10, 5, 0, 0, tzinfo=timezone.utc),
+        current_price=current_price,
+        htf=htf_analysis,
+        mtf=mtf_analysis,
+        ltf=ltf_analysis,
+        htf_candles=htf_emitted,
+        mtf_candles=mtf_emitted,
+        ltf_candles=ltf_emitted,
+        config=config,
+    )
+
+    dt_row_pattern = re.compile(r"^\d{2}-\d{2} \d{2}:\d{2},")
+    ref_dt_pattern = re.compile(r"\(\d{2}-\d{2} \d{2}:\d{2},")
+
+    # 1. Ringkasan Reference High & Low wajib memuat MM-DD HH:MM
+    assert ref_dt_pattern.search(payload["HTF_REF_HIGH_SUMMARY"])
+    assert ref_dt_pattern.search(payload["HTF_REF_LOW_SUMMARY"])
+
+    # 2. Baris tabel HTF Swings wajib diawali MM-DD HH:MM
+    swing_rows = payload["HTF_SWINGS_TABLE"].splitlines()
+    assert len(swing_rows) >= 2
+    assert all(dt_row_pattern.match(row) for row in swing_rows)
+
+    # 3. Baris tabel HTF FVG wajib diawali MM-DD HH:MM
+    fvg_rows = payload["HTF_FVG_TABLE"].splitlines()
+    assert fvg_rows and fvg_rows != ["NONE"]
+    assert all(dt_row_pattern.match(row) for row in fvg_rows)
+
+    # 4. Baris tabel HTF OB wajib diawali MM-DD HH:MM
+    ob_rows = payload["HTF_OB_TABLE"].splitlines()
+    assert ob_rows and ob_rows != ["NONE"]
+    assert all(dt_row_pattern.match(row) for row in ob_rows)
+
+    # 5. Baris CSV candle mentah HTF wajib diawali MM-DD HH:MM
+    csv_rows = payload["HTF_CANDLE_TABLE_CSV"].splitlines()
+    assert len(csv_rows) == 20
+    assert all(dt_row_pattern.match(row) for row in csv_rows)
+
+
+@pytest.mark.parametrize("daily_htf", ["1d", "3d", "1w", "1M"])
+def test_daily_and_above_htf_renders_date_only_stamps(daily_htf: str) -> None:
+    import re
+    from smc_prompt.structure_analyzer import analyze
+
+    candles = _make_smc_series()
+    config = cfg.build_config(
+        "BTCUSDT",
+        htf_interval=daily_htf,
+        mtf_interval="4h",
+        ltf_interval="1h",
+        price_format=cfg.PriceFormat(tick_decimals=2),
+    )
+    current_price = Decimal("146.00")
+
+    htf_analysis, htf_emitted, _ = analyze(
+        candles,
+        timeframe=config.htf_interval,
+        requested=config.htf_candles,
+        current_price=current_price,
+        config=config,
+    )
+    mtf_analysis, mtf_emitted, _ = analyze(
+        candles,
+        timeframe=config.mtf_interval,
+        requested=config.mtf_candles,
+        current_price=current_price,
+        config=config,
+    )
+    ltf_analysis, ltf_emitted, _ = analyze(
+        candles,
+        timeframe=config.ltf_interval,
+        requested=config.ltf_candles,
+        current_price=current_price,
+        config=config,
+    )
+
+    payload = build_payload(
+        symbol="BTCUSDT",
+        generated_at=datetime(2026, 10, 5, 0, 0, tzinfo=timezone.utc),
+        current_price=current_price,
+        htf=htf_analysis,
+        mtf=mtf_analysis,
+        ltf=ltf_analysis,
+        htf_candles=htf_emitted,
+        mtf_candles=mtf_emitted,
+        ltf_candles=ltf_emitted,
+        config=config,
+    )
+
+    date_row_pattern = re.compile(r"^\d{2}-\d{2},")
+    ref_date_pattern = re.compile(r"\(\d{2}-\d{2},")
+
+    assert ref_date_pattern.search(payload["HTF_REF_HIGH_SUMMARY"])
+    assert ref_date_pattern.search(payload["HTF_REF_LOW_SUMMARY"])
+    assert all(date_row_pattern.match(row) for row in payload["HTF_SWINGS_TABLE"].splitlines())
+    assert all(date_row_pattern.match(row) for row in payload["HTF_FVG_TABLE"].splitlines())
+    assert all(date_row_pattern.match(row) for row in payload["HTF_OB_TABLE"].splitlines())
+    assert all(date_row_pattern.match(row) for row in payload["HTF_CANDLE_TABLE_CSV"].splitlines())
+
+
+
+
 def test_short_labels_in_swings_and_fvg() -> None:
     dt = datetime(2026, 10, 29, 0, 0, tzinfo=timezone.utc)
     swings = [

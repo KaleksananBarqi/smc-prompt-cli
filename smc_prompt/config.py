@@ -84,6 +84,35 @@ def interval_label(interval: str) -> str:
 
     return INTERVAL_LABELS.get(interval, interval)
 
+
+#: Kumpulan token interval untuk timeframe harian ke atas (>= 1d).
+DAILY_OR_ABOVE_INTERVALS: frozenset[str] = frozenset(
+    {
+        "1d",
+        "3d",
+        "7d",
+        "30d",
+        "1w",
+        "1M",
+        "1day",
+        "1week",
+        "1month",
+        "Day1",
+        "Week1",
+        "Month1",
+        "D",
+        "W",
+        "M",
+    }
+)
+
+
+def is_intraday_interval(interval: str) -> bool:
+    """Kembalikan True jika ``interval`` berdurasi kurang dari satu hari (< 1d)."""
+
+    return interval.strip() not in DAILY_OR_ABOVE_INTERVALS
+
+
 KLINES_PATH: str = "/fapi/v1/klines"
 TICKER_PRICE_PATH: str = "/fapi/v1/ticker/price"
 EXCHANGE_INFO_PATH: str = "/fapi/v1/exchangeInfo"
