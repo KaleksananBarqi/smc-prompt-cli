@@ -34,7 +34,10 @@ from .models import (
     SwingType,
     TimeframeAnalysis,
 )
-from .structure_analyzer import format_dealing_range_summary
+from .structure_analyzer import (
+    format_dealing_range_summary,
+    select_dealing_range_bounds,
+)
 
 TEMPLATE_PACKAGE = "smc_prompt"
 TEMPLATE_DIR = "templates"
@@ -323,12 +326,9 @@ def _render_fvg_table(
     return "\n".join(rows)
 
 
-def _is_relevant_ob(ob: OrderBlock, total_candles: int | None) -> bool:
-    if ob.status in ("unmitigated", "tapped"):
-        return True
-    if ob.status == "invalidated" and total_candles is not None and ob.invalidated_index is not None:
-        return ob.invalidated_index >= (total_candles - 3)
-    return False
+def _is_relevant_ob(ob: OrderBlock, total_candles: int | None = None) -> bool:
+    """Filter Order Block: hanya kembalikan OB yang masih aktif (unmitigated atau tapped)."""
+    return ob.status in ("unmitigated", "tapped")
 
 
 def _render_ob_table(
@@ -422,14 +422,17 @@ def _fallback_dealing_range(
     *,
     price_format: cfg.PriceFormat | None = None,
 ) -> str:
-    """Hitung Dealing Range menggunakan swing HIGH/LOW paling mutakhir (recent)."""
+    """Hitung Dealing Range menggunakan batas swing aktif (non-broken) yang mengapit harga."""
 
     lows = [s for s in analysis.swings if s.type is SwingType.LOW]
     highs = [s for s in analysis.swings if s.type is SwingType.HIGH]
     recent_low = lows[-1] if lows else analysis.swing_low
     recent_high = highs[-1] if highs else analysis.swing_high
+    range_low, range_high = select_dealing_range_bounds(
+        analysis.swings, current_price, recent_low, recent_high
+    )
     return format_dealing_range_summary(
-        current_price, recent_low, recent_high, price_format=price_format
+        current_price, range_low, range_high, price_format=price_format
     )
 
 

@@ -641,13 +641,12 @@ def test_order_block_detection_and_mitigation() -> None:
     assert obs_invalidated[0].status == "invalidated"
     assert obs_invalidated[0].invalidated_index == 4
 
-    # Check rendering filter: since candle 4 is at index 4 and total candles=5 (4 >= 5-3),
-    # it is still recent and rendered as invalidated
+    # Check rendering filter: OB berstatus invalidated harus selalu disaring keluar
+    # (tidak boleh tampil di tabel Order Block Aktif meskipun baru batal di candle terakhir)
     pf = cfg.PriceFormat(tick_decimals=2)
     rendered = _render_ob_table(obs_invalidated, htf=True, total_candles=5, price_format=pf)
-    assert "10-01,BULL_OB,95.00,102.00,98.50,invalidated" in rendered
+    assert rendered == "NONE"
 
-    # If total candles=10, old invalidated is excluded
     rendered_filtered = _render_ob_table(obs_invalidated, htf=True, total_candles=10, price_format=pf)
     assert rendered_filtered == "NONE"
 

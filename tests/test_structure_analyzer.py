@@ -24,8 +24,10 @@ from smc_prompt.structure_analyzer import (
     detect_equal_levels,
     detect_fvg,
     enforce_alternation,
+    format_dealing_range_summary,
     minimum_required,
     prepare_series,
+    select_dealing_range_bounds,
 )
 
 from .conftest import make_candle, make_swing
@@ -458,3 +460,109 @@ def test_detect_fvg_requires_three_candles() -> None:
 )
 def test_decimals_from_tick_size(tick: object, expected: int | None) -> None:
     assert cfg.decimals_from_tick_size(tick) == expected
+
+
+# --------------------------------------------------------------------------
+# Dealing Range & Structure / Equal-Levels Active Filtering (Layer-A Bug Fixes)
+# --------------------------------------------------------------------------
+
+
+def test_classify_structure_downgrades_bullish_when_key_hl_is_broken() -> None:
+    from dataclasses import replace
+
+    config = cfg.Config(
+        symbol="BTCUSDT",
+        htf_candles=60,
+        mtf_candles=120,
+        ltf_candles=100,
+        swing_lookback=5,
+        distance_reference="nearest",
+        include_atr=True,
+        output_dir="output",
+    )
+    swings = [
+        make_swing(0, "76000", SwingType.LOW),
+        make_swing(1, "78000", SwingType.HIGH),
+        replace(make_swing(2, "77561.9", SwingType.LOW), status="broken"),
+        make_swing(3, "78853.5", SwingType.HIGH),
+    ]
+
+    assert classify_structure(swings, config, atr_value=Decimal("200")) is StructureClass.RANGING
+
+
+def test_classify_structure_downgrades_bearish_when_key_lh_is_broken() -> None:
+    from dataclasses import replace
+
+    config = cfg.Config(
+        symbol="BTCUSDT",
+        htf_candles=60,
+        mtf_candles=120,
+        ltf_candles=100,
+        swing_lookback=5,
+        distance_reference="nearest",
+        include_atr=True,
+        output_dir="output",
+    )
+    swings = [
+        make_swing(0, "80000", SwingType.HIGH),
+        make_swing(1, "78000", SwingType.LOW),
+        replace(make_swing(2, "79000", SwingType.HIGH), status="broken"),
+        make_swing(3, "77000", SwingType.LOW),
+    ]
+
+    assert classify_structure(swings, config, atr_value=Decimal("200")) is StructureClass.RANGING
+
+
+def test_select_dealing_range_bounds_skips_broken_low_above_current_price() -> None:
+    from dataclasses import replace
+
+    extreme_low = replace(make_swing(0, "76270.0", SwingType.LOW), status="untested")
+    mid_high = replace(make_swing(1, "78000.0", SwingType.HIGH), status="broken")
+    recent_low = replace(make_swing(2, "77561.9", SwingType.LOW), status="broken")
+    recent_high = replace(make_swing(3, "78853.5", SwingType.HIGH), status="untested")
+    swings = [extreme_low, mid_high, recent_low, recent_high]
+
+    current_price = Decimal("76800.0")
+    range_low, range_high = select_dealing_range_bounds(
+        swings, current_price, recent_low, recent_high
+    )
+
+    assert range_low.price == Decimal("76270.0")
+    assert range_high.price == Decimal("78853.5")
+
+    summary = format_dealing_range_summary(
+        current_price, range_low, range_high, price_format=cfg.PriceFormat(tick_decimals=1)
+    )
+    assert "76270.0–78853.5" in summary
+    assert "EQ (50%): 77561.8 (posisi harga: DISCOUNT)" in summary
+
+
+def test_detect_equal_levels_ignores_broken_swings_and_wrong_side_pools() -> None:
+    from dataclasses import replace
+
+    # Two equal lows at 77561.9 that were already broken, with current_price at 76800.0
+    swings_broken = [
+        replace(make_swing(0, "77561.9", SwingType.LOW), status="broken"),
+        make_swing(1, "78500.0", SwingType.HIGH),
+        replace(make_swing(2, "77562.0", SwingType.LOW), status="broken"),
+    ]
+    highs, lows = detect_equal_levels(
+        swings_broken, Decimal("5"), current_price=Decimal("76800.0")
+    )
+    assert highs == ()
+    assert lows == ()
+
+    # Even if status were untested, Equal Lows above current_price (76800) must be filtered out
+    swings_wrong_side = [
+        make_swing(0, "77561.9", SwingType.LOW),
+        make_swing(1, "78500.0", SwingType.HIGH),
+        make_swing(2, "77562.0", SwingType.LOW),
+        make_swing(3, "76500.0", SwingType.HIGH),
+        make_swing(4, "76501.0", SwingType.HIGH),
+    ]
+    highs_ws, lows_ws = detect_equal_levels(
+        swings_wrong_side, Decimal("5"), current_price=Decimal("76800.0")
+    )
+    assert highs_ws == ()
+    assert lows_ws == ()
+

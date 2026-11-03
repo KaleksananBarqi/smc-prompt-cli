@@ -351,8 +351,12 @@ def classify_structure(
             return StructureClass.EQUAL_LEVELS
 
     if hh and hl:
+        if lows[-1].status in ("broken", "pending_break"):
+            return StructureClass.RANGING
         return StructureClass.BULLISH
     if lh and ll:
+        if highs[-1].status in ("broken", "pending_break"):
+            return StructureClass.RANGING
         return StructureClass.BEARISH
     return StructureClass.RANGING
 
@@ -367,10 +371,12 @@ def _equal_clusters(
 ) -> list[EqualLevel]:
     """Cluster same-type swings whose prices are within ``tol`` of each other.
 
-    Scans swings in chronological order. A swing joins the open cluster when its
-    price is within ``tol`` of the cluster's representative (the running most
-    extreme price); otherwise the cluster closes and a new one opens. Only
-    clusters of size >= 2 are emitted, in chronological order. Deterministic.
+    Scans swings in chronological order, ignoring swings whose status is
+    ``broken`` or ``pending_break`` (liquidity already invalidated). A swing
+    joins the open cluster when its price is within ``tol`` of the cluster's
+    representative (the running most extreme price); otherwise the cluster
+    closes and a new one opens. Only clusters of size >= 2 are emitted, in
+    chronological order. Deterministic.
     """
 
     clusters: list[EqualLevel] = []
@@ -386,6 +392,8 @@ def _equal_clusters(
 
     for swing in swings:
         if swing.type is not swing_type:
+            continue
+        if swing.status in ("broken", "pending_break"):
             continue
         if price is None:
             price, count = swing.price, 1
@@ -407,17 +415,26 @@ def _equal_clusters(
 
 
 def detect_equal_levels(
-    swings: Sequence[SwingPoint], tol: Decimal
+    swings: Sequence[SwingPoint],
+    tol: Decimal,
+    *,
+    current_price: Decimal | None = None,
 ) -> tuple[tuple[EqualLevel, ...], tuple[EqualLevel, ...]]:
     """Return ``(equal_highs, equal_lows)`` as tuples of :class:`EqualLevel`.
 
     ``tol`` is the absolute price tolerance, normally
-    ``config.equal_levels_atr_mult × ATR``. Empty tuples when no pool exists.
+    ``config.equal_levels_atr_mult × ATR``. When ``current_price`` is provided,
+    equal highs (BSL) are filtered to ``cluster.price >= current_price`` and
+    equal lows (SSL) to ``cluster.price <= current_price``. Empty tuples when
+    no active pool exists.
     """
 
-    highs = tuple(_equal_clusters(swings, SwingType.HIGH, tol))
-    lows = tuple(_equal_clusters(swings, SwingType.LOW, tol))
-    return highs, lows
+    raw_highs = _equal_clusters(swings, SwingType.HIGH, tol)
+    raw_lows = _equal_clusters(swings, SwingType.LOW, tol)
+    if current_price is not None:
+        raw_highs = [c for c in raw_highs if c.price >= current_price]
+        raw_lows = [c for c in raw_lows if c.price <= current_price]
+    return tuple(raw_highs), tuple(raw_lows)
 
 
 # --------------------------------------------------------------------------
@@ -879,6 +896,61 @@ def format_ref_summary(
     return f"- Ref {type_label}: " + " | ".join(parts)
 
 
+def select_dealing_range_bounds(
+    swings: Sequence[SwingPoint],
+    current_price: Decimal,
+    recent_low: SwingPoint,
+    recent_high: SwingPoint,
+) -> tuple[SwingPoint, SwingPoint]:
+    """Pilih batas Dealing Range aktif (non-broken) yang mengapit harga saat ini.
+
+    Jika ``recent_low`` masih valid (bukan ``broken``) dan ``<= current_price``,
+    pertahankan ``recent_low``. Jika sudah ``broken`` atau berada di atas
+    ``current_price``, cari mundur dari swing terbaru untuk menemukan
+    ``SwingType.LOW`` aktif (status ``!= "broken"``) yang ``<= current_price``,
+    dengan fallback ke swing low non-broken terendah atau ``recent_low``.
+    Logika simetris diterapkan pada ``recent_high`` (``SwingType.HIGH`` aktif
+    yang ``>= current_price``).
+    """
+
+    lows = [s for s in swings if s.type is SwingType.LOW]
+    highs = [s for s in swings if s.type is SwingType.HIGH]
+
+    range_low = recent_low
+    if recent_low.status == "broken" or recent_low.price > current_price:
+        active_lows_below = [
+            s
+            for s in reversed(lows)
+            if s.status != "broken" and s.price <= current_price
+        ]
+        if active_lows_below:
+            range_low = active_lows_below[0]
+        else:
+            active_lows = [s for s in lows if s.status != "broken"]
+            if active_lows:
+                range_low = min(active_lows, key=lambda s: s.price)
+            elif lows:
+                range_low = min(lows, key=lambda s: s.price)
+
+    range_high = recent_high
+    if recent_high.status == "broken" or recent_high.price < current_price:
+        active_highs_above = [
+            s
+            for s in reversed(highs)
+            if s.status != "broken" and s.price >= current_price
+        ]
+        if active_highs_above:
+            range_high = active_highs_above[0]
+        else:
+            active_highs = [s for s in highs if s.status != "broken"]
+            if active_highs:
+                range_high = max(active_highs, key=lambda s: s.price)
+            elif highs:
+                range_high = max(highs, key=lambda s: s.price)
+
+    return range_low, range_high
+
+
 def format_dealing_range_summary(
     current_price: Decimal,
     recent_low: SwingPoint,
@@ -959,10 +1031,13 @@ def build_reference_facts(
         atr=atr,
         price_format=price_format,
     )
+    range_low, range_high = select_dealing_range_bounds(
+        swings, current_price, recent_low, recent_high
+    )
     dealing_range_summary = format_dealing_range_summary(
         current_price,
-        recent_low,
-        recent_high,
+        range_low,
+        range_high,
         price_format=price_format,
     )
 
@@ -1115,10 +1190,16 @@ def analyze(
             f"({len(closed)} closed candles). Prompt not generated."
         )
 
-    structure = classify_structure(swings, config, atr_value=atr)
+    swings_with_status = tuple(
+        replace(s, status=compute_level_status(closed, s, s.type))
+        for s in swings
+    )
+    rendered_swings = tuple(swings_with_status[-config.swings_table_rows :])
+
+    structure = classify_structure(swings_with_status, config, atr_value=atr)
     ref_high, ref_low, dist_high, dist_low = compute_distance_metrics(
         current_price,
-        swings,
+        swings_with_status,
         mode=config.distance_reference,
         price_format=config.price_format,
     )
@@ -1128,31 +1209,39 @@ def analyze(
     # even when the reported reference uses ``most-recent`` mode (and vice
     # versa for the recent-by-time pair).
     recent_high = select_reference(
-        swings, SwingType.HIGH, current_price, cfg.DISTANCE_REFERENCE_MOST_RECENT
+        swings_with_status,
+        SwingType.HIGH,
+        current_price,
+        cfg.DISTANCE_REFERENCE_MOST_RECENT,
     )
     recent_low = select_reference(
-        swings, SwingType.LOW, current_price, cfg.DISTANCE_REFERENCE_MOST_RECENT
+        swings_with_status,
+        SwingType.LOW,
+        current_price,
+        cfg.DISTANCE_REFERENCE_MOST_RECENT,
     )
     nearest_high = select_reference(
-        swings, SwingType.HIGH, current_price, cfg.DISTANCE_REFERENCE_NEAREST
+        swings_with_status,
+        SwingType.HIGH,
+        current_price,
+        cfg.DISTANCE_REFERENCE_NEAREST,
     )
     nearest_low = select_reference(
-        swings, SwingType.LOW, current_price, cfg.DISTANCE_REFERENCE_NEAREST
+        swings_with_status,
+        SwingType.LOW,
+        current_price,
+        cfg.DISTANCE_REFERENCE_NEAREST,
     )
 
     fvgs = tuple(detect_fvg(closed, config.fvg_atr_mult, atr_value=atr))
     order_blocks = tuple(detect_order_blocks(closed, fvgs))
 
-    swings_with_status = tuple(
-        replace(s, status=compute_level_status(closed, s, s.type))
-        for s in swings
-    )
-    rendered_swings = tuple(swings_with_status[-config.swings_table_rows :])
-
     tol = (
         config.equal_levels_atr_mult * atr if atr is not None else Decimal("0")
     )
-    equal_highs, equal_lows = detect_equal_levels(swings, tol)
+    equal_highs, equal_lows = detect_equal_levels(
+        swings_with_status, tol, current_price=current_price
+    )
 
     volume = compute_relative_volume(
         closed,
