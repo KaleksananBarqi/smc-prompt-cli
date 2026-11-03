@@ -1284,5 +1284,4 @@ Setelah render, ukuran prompt dihitung dalam **byte UTF-8**:
 
 ## Lisensi
 
-Dirilis di bawah **MIT License** (lihat metadata `license = { text = "MIT" }`
-pada [`pyproject.toml`](pyproject.toml)).
+Dirilis di bawah **MIT License**.
