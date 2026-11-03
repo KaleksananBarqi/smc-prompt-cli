@@ -63,6 +63,9 @@ INCLUDE_ATR_VAR = "INCLUDE_ATR"
 #: provider value that happens to contain ``{{`` / ``}}`` cannot false-positive.
 PROVIDER_NAME_VAR = "provider"
 
+#: Nama variabel render opsional untuk baris konteks derivatif (Funding Rate & OI).
+DERIVATIVES_CONTEXT_VAR = "DERIVATIVES_CONTEXT_LINE"
+
 #: Matches a Jinja substitution tag naming a single placeholder, e.g. ``{{PAIR}}``
 #: or ``{{ PAIR }}``. Used by :func:`check_unresolved_placeholders` instead of a
 #: naive ``"{{" in text`` substring scan, which would false-positive on any
@@ -672,6 +675,7 @@ def render(
     *,
     include_atr: bool = True,
     provider_name: str = "Binance",
+    derivatives_context_line: str = "",
 ) -> RenderedPrompt:
     """Render the template with strict undefined handling.
 
@@ -697,6 +701,7 @@ def render(
                 # template is autoescape=False; escaping here is what keeps a
                 # provider label from ever being read as a Jinja tag.
                 PROVIDER_NAME_VAR: html.escape(provider_name, quote=False),
+                DERIVATIVES_CONTEXT_VAR: derivatives_context_line,
             }
         )
     except TemplateError as exc:

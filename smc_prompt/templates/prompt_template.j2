@@ -7,6 +7,9 @@ Bertindaklah sebagai **Senior ICT/SMC Trading Analyst**. Analisis dilakukan meng
 - **Sesi Pasar (UTC):** {{SESSION_KILLZONE_UTC}}
 - **Current price:** {{CURRENT_PRICE}}
 - **ATR % of price (HTF):** {{ATR_PCT_OF_PRICE}}
+{% if DERIVATIVES_CONTEXT_LINE %}
+{{DERIVATIVES_CONTEXT_LINE}}
+{% endif %}
 
 > Data di bawah dihasilkan otomatis dari live market data API ({{provider}}), BUKAN dari observasi visual chart. Perlakukan seluruh angka sebagai [FAKTA] terverifikasi. Anda tidak memiliki akses ke bentuk visual candle/wick di luar angka OHLC yang diberikan — jangan berasumsi detail visual yang tidak tercermin dalam angka ini.
 >

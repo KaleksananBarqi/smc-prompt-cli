@@ -30,6 +30,7 @@ from .errors import (
     exit_code_for,
 )
 from .gate_source import GateSource
+from .market_context import fetch_derivatives_context
 from .mexc_source import MexcSource
 from .models import Candle
 from .oanda_source import OandaSource
@@ -1044,10 +1045,31 @@ def run(
     # ``provider_name`` is a render variable, not a payload placeholder, so the
     # frozen template stays provider-agnostic while the provenance line always
     # names the source that actually produced the data.
+    derivatives_context_line = ""
+    if (
+        not offline_mode
+        and config.provider in cfg.CRYPTO_FAILOVER_CHAIN
+        and (
+            isinstance(
+                fetcher, (DataFetcher, BitunixSource, MexcSource, GateSource)
+            )
+            or hasattr(fetcher, "fetch_derivatives_info")
+        )
+    ):
+        try:
+            derivatives_context_line = fetch_derivatives_context(
+                config,
+                active_fetcher=fetcher,
+                offline_mode=offline_mode,
+            )
+        except (Exception, AssertionError):
+            derivatives_context_line = ""
+
     rendered = render(
         payload,
         include_atr=config.include_atr,
         provider_name=config.provider_label,
+        derivatives_context_line=derivatives_context_line,
     )
     prompt_text = rendered.text
 
