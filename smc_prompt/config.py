@@ -668,6 +668,24 @@ def fmt_generated_at(moment: datetime) -> str:
     return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def fmt_session_killzone(moment: datetime) -> str:
+    """Petakan jam UTC dari ``moment`` secara deterministik ke jendela sesi Killzone ICT."""
+
+    hour = moment.astimezone(timezone.utc).hour
+    if hour < 7:
+        return "Asia Session (00:00-07:00 UTC)"
+    if hour < 10:
+        return "London Open Killzone (07:00-10:00 UTC)"
+    if hour < 12:
+        return "London Session / Pre-NY (10:00-12:00 UTC)"
+    if hour < 15:
+        return "New York Open Killzone (12:00-15:00 UTC)"
+    if hour < 20:
+        return "London Close / NY Afternoon (15:00-20:00 UTC)"
+    return "Late NY / Off-Session (20:00-00:00 UTC)"
+
+
+
 def fmt_output_stamp(moment: datetime) -> str:
     """Output filename stamp: ``%Y%m%dT%H%M%SZ``."""
 

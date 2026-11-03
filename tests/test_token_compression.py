@@ -87,6 +87,153 @@ def test_is_intraday_interval_false_for_daily_and_above(interval: str) -> None:
     assert cfg.is_intraday_interval(interval) is False
 
 
+@pytest.mark.parametrize(
+    ("hour", "expected"),
+    [
+        (0, "Asia Session (00:00-07:00 UTC)"),
+        (6, "Asia Session (00:00-07:00 UTC)"),
+        (7, "London Open Killzone (07:00-10:00 UTC)"),
+        (9, "London Open Killzone (07:00-10:00 UTC)"),
+        (10, "London Session / Pre-NY (10:00-12:00 UTC)"),
+        (11, "London Session / Pre-NY (10:00-12:00 UTC)"),
+        (12, "New York Open Killzone (12:00-15:00 UTC)"),
+        (14, "New York Open Killzone (12:00-15:00 UTC)"),
+        (15, "London Close / NY Afternoon (15:00-20:00 UTC)"),
+        (19, "London Close / NY Afternoon (15:00-20:00 UTC)"),
+        (20, "Late NY / Off-Session (20:00-00:00 UTC)"),
+        (23, "Late NY / Off-Session (20:00-00:00 UTC)"),
+    ],
+)
+def test_fmt_session_killzone_all_six_windows(hour: int, expected: str) -> None:
+    dt = datetime(2026, 11, 3, hour, 45, tzinfo=timezone.utc)
+    assert cfg.fmt_session_killzone(dt) == expected
+
+
+@pytest.mark.parametrize(
+    ("current_price", "expected_zone"),
+    [
+        (Decimal("94.99"), "DISCOUNT"),
+        (Decimal("95.00"), "AT EQ"),
+        (Decimal("95.01"), "PREMIUM"),
+    ],
+)
+def test_dealing_range_and_equilibrium_zones(
+    current_price: Decimal, expected_zone: str
+) -> None:
+    from smc_prompt.structure_analyzer import (
+        build_reference_facts,
+        format_dealing_range_summary,
+    )
+
+    dt_l = datetime(2026, 11, 1, 0, 0, tzinfo=timezone.utc)
+    dt_h = datetime(2026, 11, 2, 0, 0, tzinfo=timezone.utc)
+    recent_low = SwingPoint(index=0, open_time=dt_l, price=Decimal("90.00"), type=SwingType.LOW)
+    recent_high = SwingPoint(index=1, open_time=dt_h, price=Decimal("100.00"), type=SwingType.HIGH)
+    pf = cfg.PriceFormat(tick_decimals=2)
+
+    expected_line = (
+        f"- Dealing Range (Recent): 90.00–100.00 | EQ (50%): 95.00 (posisi harga: {expected_zone})"
+    )
+    assert (
+        format_dealing_range_summary(
+            current_price, recent_low, recent_high, price_format=pf
+        )
+        == expected_line
+    )
+
+    candles = [
+        _make_candle(0, "92", "95", "90", "93", open_time=dt_l),
+        _make_candle(1, "93", "100", "91", "98", open_time=dt_h),
+    ]
+    facts = build_reference_facts(
+        current_price,
+        htf=True,
+        candles=candles,
+        swings=(recent_low, recent_high),
+        rendered_swings=(recent_low, recent_high),
+        recent_high=recent_high,
+        recent_low=recent_low,
+        price_format=pf,
+    )
+    assert facts.dealing_range_summary == expected_line
+
+
+def test_killzone_and_dealing_range_in_payload_and_rendered_prompt() -> None:
+    from smc_prompt.models import REQUIRED_PLACEHOLDERS
+    from smc_prompt.structure_analyzer import analyze
+
+    for key in (
+        "SESSION_KILLZONE_UTC",
+        "HTF_DEALING_RANGE",
+        "MTF_DEALING_RANGE",
+        "LTF_DEALING_RANGE",
+    ):
+        assert key in REQUIRED_PLACEHOLDERS
+
+    candles = _make_smc_series()
+    config = cfg.build_config(
+        "BTCUSDT",
+        htf_interval="4h",
+        mtf_interval="1h",
+        ltf_interval="15m",
+        price_format=cfg.PriceFormat(tick_decimals=2),
+    )
+    current_price = Decimal("146.00")
+
+    htf_analysis, htf_emitted, _ = analyze(
+        candles,
+        timeframe=config.htf_interval,
+        requested=config.htf_candles,
+        current_price=current_price,
+        config=config,
+    )
+    mtf_analysis, mtf_emitted, _ = analyze(
+        candles,
+        timeframe=config.mtf_interval,
+        requested=config.mtf_candles,
+        current_price=current_price,
+        config=config,
+    )
+    ltf_analysis, ltf_emitted, _ = analyze(
+        candles,
+        timeframe=config.ltf_interval,
+        requested=config.ltf_candles,
+        current_price=current_price,
+        config=config,
+    )
+
+    payload = build_payload(
+        symbol="BTCUSDT",
+        generated_at=datetime(2026, 10, 5, 8, 15, tzinfo=timezone.utc),
+        current_price=current_price,
+        htf=htf_analysis,
+        mtf=mtf_analysis,
+        ltf=ltf_analysis,
+        htf_candles=htf_emitted,
+        mtf_candles=mtf_emitted,
+        ltf_candles=ltf_emitted,
+        config=config,
+    )
+
+    assert payload["SESSION_KILLZONE_UTC"] == "London Open Killzone (07:00-10:00 UTC)"
+    for tf_key in ("HTF_DEALING_RANGE", "MTF_DEALING_RANGE", "LTF_DEALING_RANGE"):
+        assert payload[tf_key].startswith("- Dealing Range (Recent): ")
+        assert " | EQ (50%): " in payload[tf_key]
+        assert "(posisi harga: PREMIUM)" in payload[tf_key]
+
+    rendered = render(payload, include_atr=True).text
+    assert (
+        "- **Waktu generate (UTC):** 2026-10-05T08:15:00Z\n"
+        "- **Sesi Pasar (UTC):** London Open Killzone (07:00-10:00 UTC)\n"
+    ) in rendered
+    assert f"{payload['HTF_REF_LOW_SUMMARY']}\n{payload['HTF_DEALING_RANGE']}\n" in rendered
+    assert f"{payload['MTF_REF_LOW_SUMMARY']}\n{payload['MTF_DEALING_RANGE']}\n" in rendered
+    assert f"{payload['LTF_REF_LOW_SUMMARY']}\n{payload['LTF_DEALING_RANGE']}\n" in rendered
+
+
+
+
+
 def _make_smc_series() -> list[Candle]:
     """Susun 20 candle 4h tertutup lengkap dengan fractal swings, FVG unfilled, dan OB aktif."""
     from datetime import timedelta

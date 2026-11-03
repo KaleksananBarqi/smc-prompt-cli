@@ -178,6 +178,7 @@ class ReferenceFacts:
     window_low: str
     ref_high_summary: str = ""
     ref_low_summary: str = ""
+    dealing_range_summary: str = ""
 
 
 @dataclass(frozen=True)
@@ -245,12 +246,14 @@ class RenderedPrompt:
 REQUIRED_PLACEHOLDERS: tuple[str, ...] = (
     "PAIR",
     "GENERATED_AT_UTC",
+    "SESSION_KILLZONE_UTC",
     "CURRENT_PRICE",
     #: ATR(14) as a percentage of current price (Phase 5, #6).
     "ATR_PCT_OF_PRICE",
     "HTF_STRUCTURE_CLASS",
     "HTF_REF_HIGH_SUMMARY",
     "HTF_REF_LOW_SUMMARY",
+    "HTF_DEALING_RANGE",
     "HTF_EQUAL_HIGHS",
     "HTF_EQUAL_LOWS",
     "HTF_VOLUME_RELATIVE",
@@ -266,6 +269,7 @@ REQUIRED_PLACEHOLDERS: tuple[str, ...] = (
     "MTF_STRUCTURE_CLASS",
     "MTF_REF_HIGH_SUMMARY",
     "MTF_REF_LOW_SUMMARY",
+    "MTF_DEALING_RANGE",
     "MTF_EQUAL_HIGHS",
     "MTF_EQUAL_LOWS",
     "MTF_VOLUME_RELATIVE",
@@ -281,6 +285,7 @@ REQUIRED_PLACEHOLDERS: tuple[str, ...] = (
     "LTF_STRUCTURE_CLASS",
     "LTF_REF_HIGH_SUMMARY",
     "LTF_REF_LOW_SUMMARY",
+    "LTF_DEALING_RANGE",
     "LTF_EQUAL_HIGHS",
     "LTF_EQUAL_LOWS",
     "LTF_VOLUME_RELATIVE",
