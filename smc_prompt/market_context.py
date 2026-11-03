@@ -1,19 +1,29 @@
-"""Pengayaan konteks pasar derivatif (Funding Rate & Open Interest) dengan strategi Binance-First.
+"""Pengayaan konteks pasar tambahan (Derivatif & Acuan Struktur BTCUSDT) dengan strategi Binance-First.
 
-Mengambil statistik derivatif dari Binance Futures terlebih dahulu sebagai acuan
-likuiditas global terdalam, lalu beralih (*fallback*) secara anggun ke provider
-kripto aktif (`bitunix`, `mexc`, `gate`) apabila Binance tidak dapat dihubungi
-atau tidak mencantumkan simbol tersebut.
+Mengambil statistik derivatif (Funding Rate & Open Interest) serta acuan struktur
+``BTCUSDT`` (untuk deteksi *SMT Divergence* pada altcoin) dari Binance Futures
+terlebih dahulu sebagai acuan likuiditas global terdalam, lalu beralih (*fallback*)
+secara anggun ke provider kripto aktif (`bitunix`, `mexc`, `gate`) apabila Binance
+tidak dapat dihubungi atau tidak mencantumkan simbol tersebut.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import requests
 
 from . import config as cfg
+from .bitunix_source import BitunixSource
+from .data_fetcher import DataFetcher
+from .gate_source import GateSource
+from .mexc_source import MexcSource
+from .models import SwingType
+from .structure_analyzer import analyze
+
+_BTC_SYMBOLS: frozenset[str] = frozenset({"BTCUSDT", "BTCUSDC", "BTCUSD", "BTCBUSD"})
 
 BINANCE_PREMIUM_INDEX_PATH: str = "/fapi/v1/premiumIndex"
 BINANCE_OPEN_INTEREST_PATH: str = "/fapi/v1/openInterest"
@@ -99,6 +109,40 @@ def format_derivatives_context_line(
     return (
         f"- **Konteks Derivatif ({source_label}):** "
         f"Funding: {funding_str} | OI: {oi_str}{delta_suffix}"
+    )
+
+
+def format_btc_benchmark_line(
+    *,
+    source_label: str,
+    btc_price: Decimal | float | int | str | None,
+    htf_label: str,
+    htf_structure: str,
+    htf_recent_high: Decimal | float | int | str | None,
+    htf_high_status: str,
+    htf_recent_low: Decimal | float | int | str | None,
+    htf_low_status: str,
+    mtf_label: str,
+    mtf_structure: str,
+    price_format: cfg.PriceFormat | None = None,
+) -> str:
+    """Rakit baris tunggal ringkasan benchmark struktur BTCUSDT untuk evaluasi SMT Divergence."""
+
+    price_dec = _to_decimal(btc_price)
+    high_dec = _to_decimal(htf_recent_high)
+    low_dec = _to_decimal(htf_recent_low)
+    if price_dec is None or high_dec is None or low_dec is None:
+        return ""
+
+    pf = price_format or cfg.PriceFormat(tick_decimals=2)
+    fmt_btc_price = pf.fmt(price_dec)
+    fmt_high = pf.fmt(high_dec)
+    fmt_low = pf.fmt(low_dec)
+    return (
+        f"- **Benchmark BTCUSDT ({source_label}):** {fmt_btc_price} "
+        f"| HTF ({htf_label}): {htf_structure} "
+        f"(Ref HIGH: {fmt_high} {htf_high_status}, Ref LOW: {fmt_low} {htf_low_status}) "
+        f"| MTF ({mtf_label}): {mtf_structure}"
     )
 
 
@@ -365,4 +409,189 @@ def fetch_derivatives_context(
         return ""
 
     return ""
+
+
+def _is_btc_symbol(symbol: str) -> bool:
+    """Kembalikan True jika simbol ternormalisasi sudah merupakan pasangan BTC."""
+
+    normalized = symbol.upper().replace("_", "").replace("/", "").replace("-", "")
+    return normalized in _BTC_SYMBOLS
+
+
+def _build_btc_benchmark_from_fetcher(
+    btc_config: cfg.Config,
+    btc_fetcher: Any,
+    *,
+    source_label: str,
+) -> str:
+    """Ambil candle HTF & MTF serta harga terkini BTCUSDT dari ``btc_fetcher`` dan rakit baris benchmark."""
+
+    htf_raw = btc_fetcher.fetch_klines(
+        btc_config.htf_interval, btc_config.htf_fetch_limit
+    )
+    mtf_raw = btc_fetcher.fetch_klines(
+        btc_config.mtf_interval, btc_config.mtf_fetch_limit
+    )
+    btc_price = btc_fetcher.fetch_current_price()
+
+    htf_analysis, _, _ = analyze(
+        htf_raw,
+        timeframe=btc_config.htf_interval,
+        requested=btc_config.htf_candles,
+        current_price=btc_price,
+        config=btc_config,
+    )
+    mtf_analysis, _, _ = analyze(
+        mtf_raw,
+        timeframe=btc_config.mtf_interval,
+        requested=btc_config.mtf_candles,
+        current_price=btc_price,
+        config=btc_config,
+    )
+
+    highs = [s for s in htf_analysis.swings if s.type is SwingType.HIGH]
+    lows = [s for s in htf_analysis.swings if s.type is SwingType.LOW]
+    recent_high = highs[-1] if highs else htf_analysis.swing_high
+    recent_low = lows[-1] if lows else htf_analysis.swing_low
+    high_status = recent_high.status if highs else htf_analysis.swing_high_status
+    low_status = recent_low.status if lows else htf_analysis.swing_low_status
+
+    return format_btc_benchmark_line(
+        source_label=source_label,
+        btc_price=btc_price,
+        htf_label=btc_config.htf_interval_label,
+        htf_structure=htf_analysis.structure_class.value,
+        htf_recent_high=recent_high.price,
+        htf_high_status=high_status,
+        htf_recent_low=recent_low.price,
+        htf_low_status=low_status,
+        mtf_label=btc_config.mtf_interval_label,
+        mtf_structure=mtf_analysis.structure_class.value,
+        price_format=btc_config.price_format,
+    )
+
+
+def fetch_btc_benchmark_context(
+    config: cfg.Config,
+    *,
+    active_fetcher: Any = None,
+    session: requests.Session | None = None,
+    offline_mode: bool = False,
+) -> str:
+    """Ambil baris acuan struktur BTCUSDT untuk deteksi SMT Divergence pada altcoin."""
+
+    if (
+        offline_mode
+        or config.provider not in cfg.CRYPTO_FAILOVER_CHAIN
+        or _is_btc_symbol(config.symbol)
+    ):
+        return ""
+
+    try:
+        if active_fetcher is not None and hasattr(
+            active_fetcher, "fetch_btc_benchmark_info"
+        ):
+            custom_info = active_fetcher.fetch_btc_benchmark_info()
+            if isinstance(custom_info, str) and custom_info.strip():
+                return custom_info.strip()
+            if isinstance(custom_info, dict):
+                line = format_btc_benchmark_line(
+                    source_label=str(
+                        custom_info.get("source_label") or config.provider_label
+                    ),
+                    btc_price=custom_info.get("btc_price"),
+                    htf_label=str(
+                        custom_info.get("htf_label") or config.htf_interval_label
+                    ),
+                    htf_structure=str(custom_info.get("htf_structure") or ""),
+                    htf_recent_high=custom_info.get("htf_recent_high"),
+                    htf_high_status=str(
+                        custom_info.get("htf_high_status") or "untested"
+                    ),
+                    htf_recent_low=custom_info.get("htf_recent_low"),
+                    htf_low_status=str(
+                        custom_info.get("htf_low_status") or "untested"
+                    ),
+                    mtf_label=str(
+                        custom_info.get("mtf_label") or config.mtf_interval_label
+                    ),
+                    mtf_structure=str(custom_info.get("mtf_structure") or ""),
+                )
+                if line:
+                    return line
+
+        http_session = session
+        if http_session is None and active_fetcher is not None:
+            http_session = getattr(active_fetcher, "_session", None) or getattr(
+                getattr(active_fetcher, "_http", None), "session", None
+            )
+        if http_session is None:
+            http_session = requests.Session()
+
+        now_fn = (
+            getattr(active_fetcher, "_now", None)
+            if active_fetcher is not None
+            and callable(getattr(active_fetcher, "_now", None))
+            else None
+        )
+
+        btc_config = replace(
+            config,
+            symbol="BTCUSDT",
+            price_format=cfg.PriceFormat(tick_decimals=2),
+            retry_max=1,
+        )
+
+        # 1. Coba Binance terlebih dahulu (Binance-First)
+        try:
+            binance_cfg = replace(btc_config, provider=cfg.PROVIDER_BINANCE)
+            binance_fetcher = DataFetcher(
+                binance_cfg,
+                session=http_session,
+                sleep=lambda _: None,
+                now=now_fn,
+            )
+            line = _build_btc_benchmark_from_fetcher(
+                binance_cfg,
+                binance_fetcher,
+                source_label=cfg.provider_label(cfg.PROVIDER_BINANCE),
+            )
+            if line:
+                return line
+        except (Exception, AssertionError):
+            pass
+
+        # 2. Fallback ke penyedia kripto aktif apabila bukan Binance
+        if config.provider == cfg.PROVIDER_BITUNIX:
+            fallback_fetcher: Any = BitunixSource(
+                btc_config,
+                session=http_session,
+                sleep=lambda _: None,
+                now=now_fn,
+            )
+        elif config.provider == cfg.PROVIDER_MEXC:
+            fallback_fetcher = MexcSource(
+                btc_config,
+                session=http_session,
+                sleep=lambda _: None,
+                now=now_fn,
+            )
+        elif config.provider == cfg.PROVIDER_GATE:
+            fallback_fetcher = GateSource(
+                btc_config,
+                session=http_session,
+                sleep=lambda _: None,
+                now=now_fn,
+            )
+        else:
+            return ""
+
+        return _build_btc_benchmark_from_fetcher(
+            btc_config,
+            fallback_fetcher,
+            source_label=cfg.provider_label(config.provider),
+        )
+    except (Exception, AssertionError):
+        return ""
+
 
