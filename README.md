@@ -49,12 +49,16 @@ tinggal menjalankan satu perintah lalu menempelkan hasilnya ke LLM mana pun.
 - **Dukungan 4 Bursa Kripto USDT-M Futures Tanpa API Key:** Mengambil data candlestick dan harga live publik langsung dari **Binance Futures**, **Bitunix Futures**, **MEXC Futures**, dan **Gate.io Futures** secara gratis dan instan tanpa perlu akun atau API key.
 - **Normalisasi Simbol Kontrak Otomatis:** Input simbol standar (mis. `BTCUSDT`, `ETHUSDT`) otomatis diterjemahkan ke format kontrak bursa masing-masing (mis. `BTC_USDT` untuk MEXC dan Gate.io).
 - **Penanganan Cerdas Ketidakcocokan Interval (Interval Skipping):** Jika exchange cadangan di tengah rantai tidak mendukung interval tertentu (misal interval `2h` pada MEXC), sistem otomatis melompati exchange tersebut dengan peringatan (*warning*) dan melanjutkan ke exchange berikutnya (Gate.io).
-- **Optimasi & Kompresi Token Output Prompt:** Output prompt dirancang hemat token (~3.000–4.000 token, terpangkas >65% dari prompt lama yang mencapai ~13.000 token) tanpa mengurangi akurasi indikator Layer-A. Slicing candle mentah default menggunakan *Render Tail* (HTF 20, MTF 30, LTF 40 candle terakhir), volume integer rounding, compact timestamp (`MM-DD` / `MM-DD HH:MM`), label singkat (`SH`/`SL`, `BULL`/`BEAR`), dan deduplikasi referensi level. Tersedia flag `--full-candles` jika membutuhkan seluruh baris histori candle.
+- **Optimasi & Kompresi Token Output Prompt:** Output prompt dirancang hemat token (~3.000–4.000 token, terpangkas >65% dari prompt lama yang mencapai ~13.000 token) tanpa mengurangi akurasi indikator Layer-A. Slicing candle mentah default menggunakan *Render Tail* (HTF 20, MTF 30, LTF 40 candle terakhir), volume integer rounding, compact timestamp **seragam `MM-DD HH:MM` (UTC)** di seluruh tabel dan referensi untuk instrumen intraday (4H/1H/15m), label singkat (`SH`/`SL`, `BULL`/`BEAR`), dan deduplikasi referensi level. Tersedia flag `--full-candles` jika membutuhkan seluruh baris histori candle.
+- **Pengayaan Konteks Pasar Otomatis (Binance-First Enrichment):**
+  - **Konteks Derivatif (`DERIVATIVES_CONTEXT`):** Menarik *Funding Rate*, *Open Interest* (OI), dan perubahan 4H (`OI Delta 4H`) secara otomatis untuk pasangan kripto (prioritas Binance Futures dengan *fallback* anggun ke Bitunix, MEXC, atau Gate.io).
+  - **Acuan Struktur BTC & Deteksi SMT Divergence (`BTC_BENCHMARK`):** Saat menganalisis *altcoin* (simbol kripto selain BTC), sistem otomatis menyertakan ringkasan struktur HTF/MTF `BTCUSDT` beserta status swing terbarunya agar LLM dapat memvalidasi *Smart Money Technique (SMT) Divergence* secara kuantitatif.
+- **Kerangka Analisis SMC/ICT v2 Terstruktur:** Template prompt membimbing LLM melalui pemisahan tegas antara **Inducement (IDM / *internal liquidity trap*)** vs **Draw on Liquidity (DOL / target eksternal)**, **Sesi & Killzone UTC** (Asian Range, London Open, NY AM/PM), dual-skenario eksekusi **Tipe A (Active Entry)** vs **Tipe B (Pending Confirmation)**, kalkulasi **Position Sizing `1R` & Buffer Taker Fee**, serta **Rubrik Skor Konfluensi (0–5)** dengan batas tegas `NO TRADE` jika skor `< 3/5`.
 - **Dua lapisan payload** yang disuntikkan ke prompt:
   - **Layer A — Computed Summary:** harga saat ini, swing high/low terdeteksi
     (harga + timestamp), **sequence swing berlabel** (HH/HL/LH/LL/EQH/EQL) lengkap dengan **status likuiditas 5 level** (`untested`, `wick_sweep`, `reclaim_sweep`, `pending_break`, `broken`),
-    klasifikasi struktur mekanis, **equal highs/lows (liquidity pool)**,
-    **Fair Value Gap (FVG) mekanis** (3-candle, hanya menyaring gap `unfilled` atau yang baru `filled` dalam $\le 3$ candle terakhir), **Order Block (OB) mekanis** berbasis FVG displacement lengkap dengan 50% *Mean Threshold* (`mt`) dan status mitigasi (`unmitigated`, `tapped`), **tiga jenis referensi level** (recent / nearest /
+    klasifikasi struktur mekanis (otomatis turun ke `Ranging/Mixed` apabila *protected swing* `HL`/`LH` terakhir sudah `broken`), **Dealing Range & Equilibrium (EQ 50%)** dari batas swing aktif (non-`broken`) yang mengapit harga beserta zona valuasi (`DISCOUNT` / `PREMIUM` / `AT EQ`), **equal highs/lows (liquidity pool aktif)** yang menyaring level `broken` dan memvalidasi sisi harga (`EQH >= current_price`, `EQL <= current_price`),
+    **Fair Value Gap (FVG) mekanis** (3-candle, hanya menyaring gap `unfilled` atau yang baru `filled` dalam $\le 3$ candle terakhir), **Order Block (OB) mekanis** berbasis FVG displacement lengkap dengan 50% *Mean Threshold* (`mt`) dan status aktif (`unmitigated`, `tapped`; OB `invalidated` disaring keluar), **tiga jenis referensi level** (recent / nearest /
     window-extreme) diringkas secara padat, metrik jarak, dan
     ATR(14) opsional. Jarak swing juga disajikan **ternormalisasi ATR**
     (`x{n}×ATR`), ATR(14) diringkas sebagai **persentase harga**
@@ -310,11 +314,11 @@ konstanta `DEFAULT_BASE_URLS`.
 - **stdout kosong secara default**; prompt hanya dicetak ke stdout bila Anda
   memakai flag `--stdout`. Seluruh catatan, peringatan, dan error dikirim ke
   stderr.
-- Setiap baris CSV berformat: HTF `MM-DD,O,H,L,C,V` dan MTF/LTF
-  `MM-DD HH:MM,O,H,L,C,V` (tanpa header, tanpa kolom indeks; kolom `volume`
-  dibulatkan menjadi integer deterministik). Secara default hanya merender
+- Setiap baris CSV berformat `MM-DD HH:MM,O,H,L,C,V` untuk seluruh interval intraday (`4h`, `1h`, `15m`, dll.) dan `MM-DD,O,H,L,C,V` untuk interval harian/mingguan (`1d`, `1w`, `1M`) — tanpa header, tanpa kolom indeks; kolom `volume`
+  dibulatkan menjadi integer deterministik. Secara default hanya merender
   candle tail (20 HTF, 30 MTF, 40 LTF) untuk efisiensi token, atau seluruh
   candle kalkulasi bila menggunakan flag `--full-candles`.
+- Setiap blok `Ringkasan Data [TF]` memuat baris **Dealing Range (Recent)** dari batas swing aktif (non-`broken`) yang mengapit harga saat ini, nilai titik tengah **EQ (50%)**, serta posisi valuasi harga (`DISCOUNT`, `PREMIUM`, atau `AT EQ`).
 - Prompt memuat **tabel sequence swing** (oldest→newest, maksimum
   `swings_table_rows = 12` baris) berformat 5 kolom:
   `stamp,tipe,level,label,status` (tipe `SH`/`SL`, label `HH`/`HL`/`LH`/`LL`/`EQH`/`EQL`/`-`,
@@ -326,9 +330,9 @@ konstanta `DEFAULT_BASE_URLS`.
 - Prompt memuat **tabel Order Block Aktif** per timeframe (oldest→newest,
   maksimum `ob_table_rows = 5` baris) dengan baris:
   `stamp,tipe,lower,upper,mt,status` (tipe `BULL_OB`/`BEAR_OB`, level 50% Mean Threshold `mt`,
-  dan status `unmitigated`/`tapped`).
+  dan hanya menyaring status aktif `unmitigated`/`tapped` — OB `invalidated` dikecualikan agar tidak memakan kuota slot aktif).
 - Seluruh blok data per timeframe disusun konsisten:
-  1. Ringkasan Data [TF] (struktur, summary referensi level padat, pool equal levels, volume)
+  1. Ringkasan Data [TF] (struktur, summary referensi level padat, Dealing Range + EQ 50%, pool equal levels aktif, volume)
   2. Sequence Swing Terdeteksi [TF]
   3. FVG Mekanis (Unfilled) [TF]
   4. Order Block Aktif [TF]
@@ -1038,27 +1042,37 @@ sama untuk MTF dan LTF.
 smc_prompt/
 ├── __init__.py            # konstanta versi paket
 ├── __main__.py            # memungkinkan `python -m smc_prompt`
+├── bitunix_source.py      # data source Bitunix USDT-M Futures publik (fapi.bitunix.com)
 ├── cli.py                 # entrypoint Click + orkestrasi (failover loop & handler)
 ├── config.py              # default imutabel, string interval, aturan format, PriceFormat (tickSize)
-├── models.py              # dataclass / kontrak payload bertipe
-├── errors.py              # hierarki exception (memetakan exit code) + warning non-fatal
 ├── data_fetcher.py        # klien REST Binance (klines/ticker/exchangeInfo/time) + retry/backoff + failover
+├── dotenv_loader.py       # pemuat kredensial .env opsional dengan prioritas flag > env > .env
+├── errors.py              # hierarki exception (memetakan exit code) + warning non-fatal
 ├── gate_source.py         # data source Gate.io USDT-M Futures publik (api.gateio.ws)
+├── interactive.py         # Terminal Interactive Wizard (-i / tanpa argumen)
+├── local_source.py        # pembaca CSV OHLCV offline deterministik (--input-csv)
+├── market_context.py      # pengayaan konteks derivatif (Funding/OI) & BTC benchmark (Binance-First)
 ├── mexc_source.py         # data source MEXC USDT-M Futures publik (api.mexc.com)
+├── models.py              # dataclass / kontrak payload bertipe
 ├── oanda_source.py        # data source OANDA v20 (XAU_USD, H4 native, flag `complete`)
 ├── output.py              # tulis berkas .md + salin clipboard (best-effort)
 ├── provider_base.py       # scaffolding provider bersama: HTTP retry/failover, timestamp, agregasi, price-band
-├── structure_analyzer.py  # deteksi swing, order block, sweep/BOS, klasifikasi, jarak, ATR
+├── setup_validator.py     # analisis validasi setup & deteksi front-run (--validate-setup)
+├── structure_analyzer.py  # deteksi swing, dealing range, order block, sweep/BOS, klasifikasi, jarak, ATR
 ├── template_renderer.py   # pembangun placeholder + render Jinja2
 ├── twelvedata_source.py   # data source Twelve Data (XAU/USD, 4h native)
 └── templates/
-    └── prompt_template.j2 # template prompt (byte-frozen)
+    └── prompt_template.j2 # template prompt SMC/ICT v2 (byte-frozen)
 
 docs/
 ├── DESIGN_SPEC.md         # spesifikasi desain beku
+├── agents/                # panduan domain, issue tracker, dan label triase untuk agen AI
 └── adr/
-    └── 0001-crypto-provider-failover-chain.md  # ADR failover chain & multi-exchange
+    ├── 0001-crypto-provider-failover-chain.md            # ADR failover chain & multi-exchange
+    └── 0002-binance-first-enrichment-and-optional-context.md # ADR pengayaan derivatif & BTC benchmark
 
+GLOSSARY.md                # kamus bahasa ubikuitas domain (Dealing Range, IDM, DOL, MSS, Killzone, SMT)
+AGENTS.md                  # indeks aturan & skill agen repositori
 pyproject.toml             # metadata paket, dependensi, entry point, extra [dev]
 requirements.txt           # daftar dependensi runtime
 README.md                  # dokumen ini
@@ -1069,10 +1083,10 @@ README.md                  # dokumen ini
 Suite uji berbasis **pytest**, **tanpa jaringan** (fetcher tidak pernah dipanggil
 tanpa mock; jalur data memakai sumber CSV offline). Suite mencakup:
 `detect_swings` (equal highs + tabrakan ATR), `classify_structure`
-(HH/HL, LH/LL, mixed/ranging, equal-levels, kasus < 2 highs), `fmt_distance`
+(HH/HL, LH/LL, downgrade saat `HL`/`LH` kunci sudah `broken`, mixed/ranging, equal-levels), `select_dealing_range_bounds` & `format_dealing_range_summary`, `fmt_distance`
 (sign/magnitudo), `prepare_series` + `InsufficientDataError`, `enforce_alternation`,
-`detect_equal_levels`, `detect_fvg` (bounds/birth_time/filled/sub-noise),
-`detect_order_blocks`, `compute_level_status` (wick sweep vs BOS), derivasi
+`detect_equal_levels` (termasuk penyaringan level `broken` dan validasi sisi harga), `detect_fvg` (bounds/birth_time/filled/sub-noise),
+`detect_order_blocks` & penyaringan OB aktif (`unmitigated`/`tapped`), `compute_level_status` (wick sweep vs BOS), pengayaan `market_context` (Funding/OI & BTC benchmark), derivasi
 `tickSize → desimal`, skema CSV + parity data source, serta failover chain multi-exchange.
 
 ```bash
@@ -1081,27 +1095,29 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Fixture deterministik ada di `tests/fixtures/` (`htf_daily.csv`,
+Fixture deterministik ada di `tests/fixtures/` (`htf_daily.csv`, `mtf_4h.csv`,
 `ltf_hourly.csv`). Regenerasi dengan
 `python tests/fixtures/generate_fixtures.py` lalu tinjau diff-nya. Hash golden
 yang dipatok adalah
-`32d4d2e5cef2658a713bd3a35478824a9664cfc5ce35e14f2b23f93ee3a8b67a`
-(`15617` byte). Bila template atau placeholder berubah, regenerasi berkas
+`f3367ae8ec9811c3315550136cc76d9804596d656c7267934ad426c5ed0a64a5`
+(`17653` byte). Bila template atau placeholder berubah, regenerasi berkas
 lalu perbarui `GOLDEN_SHA256`/`GOLDEN_BYTES` di
 [`tests/conftest.py`](tests/conftest.py) setelah meninjau diff byte-for-byte.
 
-## Klasifikasi Struktur
+## Klasifikasi Struktur & Dealing Range
 
-`structure_class` adalah perbandingan mekanis murni dari swing terakhir:
+`structure_class` adalah perbandingan mekanis murni dari swing terakhir beserta validasi status penembusannya:
 
 - **Bullish** — dua swing high terakhir membentuk Higher High **dan** dua swing
-  low terakhir membentuk Higher Low.
+  low terakhir membentuk Higher Low, **serta** Higher Low terakhir belum berstatus `broken` / `pending_break`.
 - **Bearish** — dua swing high terakhir membentuk Lower High **dan** dua swing
-  low terakhir membentuk Lower Low.
+  low terakhir membentuk Lower Low, **serta** Lower High terakhir belum berstatus `broken` / `pending_break`.
 - **Equal Highs/Lows** — dua swing high terakhir **dan** dua swing low terakhir
   masing-masing berada dalam toleransi `0.1 × ATR(14)` (liquidity pool). Ini
   fakta tersendiri, sengaja **tidak** dilebur ke `Ranging/Mixed`.
-- **Ranging/Mixed** — selain di atas, atau kurang dari dua high / dua low.
+- **Ranging/Mixed** — selain di atas, kurang dari dua high / dua low, atau ketika *protected swing* terakhir (`HL` pada Bullish / `LH` pada Bearish) sudah tertembus (`broken` / `pending_break`).
+
+**Dealing Range & Equilibrium (EQ 50%):** Setiap timeframe menyertakan baris `Dealing Range (Recent)` yang ditarik dari pasangan swing low dan swing high **aktif** (`status != "broken"`) yang mengapit `current_price`. Jika `recent_low` atau `recent_high` terbaru sudah `broken` atau berada di sisi harga yang salah setelah pergerakan impulsif tajam, `select_dealing_range_bounds()` otomatis melacak mundur ke swing aktif yang mengapit harga (misal `Extreme Low` / `Extreme High`), lalu menghitung titik tengah `EQ (50%)` dan zona valuasi harga (`DISCOUNT` di bawah EQ, `PREMIUM` di atas EQ, atau `AT EQ`).
 
 ## Deteksi Swing
 
