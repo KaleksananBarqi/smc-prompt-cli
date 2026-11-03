@@ -566,11 +566,6 @@ def test_fetch_btc_benchmark_context_for_altcoin_renders_btc_structure_and_ref_l
     line = fetch_btc_benchmark_context(config, session=session)
 
     # Independently verify against analyze() on the same fixture series
-    btc_cfg = cfg.replace(
-        config,
-        symbol="BTCUSDT",
-        price_format=cfg.PriceFormat(tick_decimals=2),
-    ) if hasattr(cfg, "replace") else config
     from dataclasses import replace as dc_replace
     btc_cfg = dc_replace(config, symbol="BTCUSDT", price_format=cfg.PriceFormat(tick_decimals=2))
     htf_candles = load_csv_series(str(HTF_CSV), interval="1d").candles

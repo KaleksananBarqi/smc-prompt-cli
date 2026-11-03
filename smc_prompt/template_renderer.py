@@ -416,6 +416,23 @@ def _volume_spike(analysis: TimeframeAnalysis) -> str:
     return VOLUME_SPIKE_YES if analysis.volume.is_spike else VOLUME_SPIKE_NO
 
 
+def _fallback_dealing_range(
+    current_price: Decimal,
+    analysis: TimeframeAnalysis,
+    *,
+    price_format: cfg.PriceFormat | None = None,
+) -> str:
+    """Hitung Dealing Range menggunakan swing HIGH/LOW paling mutakhir (recent)."""
+
+    lows = [s for s in analysis.swings if s.type is SwingType.LOW]
+    highs = [s for s in analysis.swings if s.type is SwingType.HIGH]
+    recent_low = lows[-1] if lows else analysis.swing_low
+    recent_high = highs[-1] if highs else analysis.swing_high
+    return format_dealing_range_summary(
+        current_price, recent_low, recent_high, price_format=price_format
+    )
+
+
 def build_payload(
     *,
     symbol: str,
@@ -502,8 +519,8 @@ def build_payload(
         "HTF_REF_HIGH_SUMMARY": htf_facts.ref_high_summary or f"- Ref HIGH: {htf_facts.recent_high}",
         "HTF_REF_LOW_SUMMARY": htf_facts.ref_low_summary or f"- Ref LOW: {htf_facts.recent_low}",
         "HTF_DEALING_RANGE": htf_facts.dealing_range_summary
-        or format_dealing_range_summary(
-            current_price, htf.swing_low, htf.swing_high, price_format=price_format
+        or _fallback_dealing_range(
+            current_price, htf, price_format=price_format
         ),
         "HTF_VOLUME_RELATIVE": _volume_relative(htf),
         "HTF_VOLUME_SPIKE": _volume_spike(htf),
@@ -539,8 +556,8 @@ def build_payload(
         "MTF_REF_HIGH_SUMMARY": mtf_facts.ref_high_summary or f"- Ref HIGH: {mtf_facts.recent_high}",
         "MTF_REF_LOW_SUMMARY": mtf_facts.ref_low_summary or f"- Ref LOW: {mtf_facts.recent_low}",
         "MTF_DEALING_RANGE": mtf_facts.dealing_range_summary
-        or format_dealing_range_summary(
-            current_price, mtf.swing_low, mtf.swing_high, price_format=price_format
+        or _fallback_dealing_range(
+            current_price, mtf, price_format=price_format
         ),
         "MTF_VOLUME_RELATIVE": _volume_relative(mtf),
         "MTF_VOLUME_SPIKE": _volume_spike(mtf),
@@ -576,8 +593,8 @@ def build_payload(
         "LTF_REF_HIGH_SUMMARY": ltf_facts.ref_high_summary or f"- Ref HIGH: {ltf_facts.recent_high}",
         "LTF_REF_LOW_SUMMARY": ltf_facts.ref_low_summary or f"- Ref LOW: {ltf_facts.recent_low}",
         "LTF_DEALING_RANGE": ltf_facts.dealing_range_summary
-        or format_dealing_range_summary(
-            current_price, ltf.swing_low, ltf.swing_high, price_format=price_format
+        or _fallback_dealing_range(
+            current_price, ltf, price_format=price_format
         ),
         "LTF_VOLUME_RELATIVE": _volume_relative(ltf),
         "LTF_VOLUME_SPIKE": _volume_spike(ltf),

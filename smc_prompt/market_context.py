@@ -360,6 +360,23 @@ def _fetch_gate_derivatives(
         return ""
 
 
+def _resolve_http_session(
+    session: requests.Session | None,
+    active_fetcher: Any = None,
+) -> requests.Session:
+    """Ambil instance requests.Session dari argumen eksplisit, active_fetcher, atau buat baru."""
+
+    if session is not None:
+        return session
+    if active_fetcher is not None:
+        extracted = getattr(active_fetcher, "_session", None) or getattr(
+            getattr(active_fetcher, "_http", None), "session", None
+        )
+        if extracted is not None:
+            return extracted
+    return requests.Session()
+
+
 def fetch_derivatives_context(
     config: cfg.Config,
     *,
@@ -387,13 +404,7 @@ def fetch_derivatives_context(
                 if line:
                     return line
 
-        http_session = session
-        if http_session is None and active_fetcher is not None:
-            http_session = getattr(active_fetcher, "_session", None) or getattr(
-                getattr(active_fetcher, "_http", None), "session", None
-            )
-        if http_session is None:
-            http_session = requests.Session()
+        http_session = _resolve_http_session(session, active_fetcher)
 
         binance_line = _fetch_binance_derivatives(config, http_session)
         if binance_line:
@@ -520,13 +531,7 @@ def fetch_btc_benchmark_context(
                 if line:
                     return line
 
-        http_session = session
-        if http_session is None and active_fetcher is not None:
-            http_session = getattr(active_fetcher, "_session", None) or getattr(
-                getattr(active_fetcher, "_http", None), "session", None
-            )
-        if http_session is None:
-            http_session = requests.Session()
+        http_session = _resolve_http_session(session, active_fetcher)
 
         now_fn = (
             getattr(active_fetcher, "_now", None)
