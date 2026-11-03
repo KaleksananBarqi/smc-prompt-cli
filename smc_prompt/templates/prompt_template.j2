@@ -14,6 +14,7 @@ Bertindaklah sebagai **Senior ICT/SMC Trading Analyst**. Analisis dilakukan meng
 > - **Sequence Swing:** Kolom `stamp,tipe,level,label,status`. Tipe: `SH`=Swing High, `SL`=Swing Low. Label: `HH`=Higher High, `HL`=Higher Low, `LH`=Lower High, `LL`=Lower Low, `EQH`=Equal High, `EQL`=Equal Low, `-`=pertama. Status: `untested` (belum tersentuh), `wick_sweep` (wick menembus tapi close tertolak), `reclaim_sweep` (close tembus 1 candle lalu langsung reclaim di candle berikutnya), `pending_break` (baru 1 candle close menembus), `broken` (terkonfirmasi break structural ≥2 candle close berturut-turut).
 > - **FVG Mekanis:** Kolom `stamp,tipe,lower,upper,status`. Tipe: `BULL`=Bullish FVG, `BEAR`=Bearish FVG. Menampilkan gap `unfilled` (atau `filled` dalam <= 3 candle terakhir).
 > - **Order Block Aktif:** Kolom `stamp,tipe,lower,upper,mt,status`. Tipe: `BULL_OB`=Bullish OB, `BEAR_OB`=Bearish OB. `mt`=Mean Threshold (50% level). Status: `unmitigated` (belum tersentuh), `tapped` (wick masuk zona / menyentuh mt tapi body belum close menembus).
+> - **MSS / CHoCH (Market Structure Shift):** Penembusan candle close melampaui swing berlawanan terakhir pasca terjadinya liquidity sweep pada zona Inducement.
 > - **Candle Mentah:** Kolom `stamp,open,high,low,close,volume` (volume dibulatkan integer).
 
 ### Ringkasan Data HTF ({{HTF_INTERVAL_LABEL}})
@@ -126,27 +127,27 @@ Hindari klaim absolut ("pasti", "dijamin", "akan"). Gunakan kalibrasi probabilit
 
 ## 1. Multi-Timeframe Alignment (HTF, MTF & LTF)
 
+- **Hierarki & Resolusi Konflik:** HTF menentukan arah _Draw on Liquidity_ (DOL) utama; MTF menentukan _Dealing Range_ (Premium/Discount thd EQ 50%) & POI; LTF hanya untuk _trigger_ eksekusi (`HTF > MTF > LTF`). Jika HTF Ranging/Mixed, pilih 1 skenario dengan probabilitas tertinggi di Tabel Trading Plan dan nyatakan syarat flip di Bagian 6.
 - **HTF Narrative:** Identifikasi tren makro dan _Draw on Liquidity_ (DOL) dari data HTF di atas. Ke arah mana target likuiditas besar berikutnya? [FAKTA + INFERENSI]
-- **MTF Alignment:** Apakah struktur MTF mengonfirmasi atau bertentangan dengan narasi HTF? Apakah MTF adalah _dealing range_ tempat setup terbentuk? [FAKTA + INFERENSI]
-- **LTF Context:** Evaluasi struktur LTF saat ini. Apakah selaras dengan narasi HTF dan MTF, atau ini _inducement_? [INFERENSI]
+- **MTF Alignment:** Evaluasi posisi harga di dalam _Dealing Range_ MTF (zona Premium/Discount thd EQ 50%) serta POI aktif (FVG/OB). Apakah mengonfirmasi narasi HTF? [FAKTA + INFERENSI]
+- **LTF Context:** Evaluasi struktur LTF saat ini. Apakah sudah membentuk _trigger_ searah HTF/MTF, atau masih berupa pembentukan _Inducement_ (IDM)? [INFERENSI]
 
-## 2. Peta Jebakan Ritel (Retail Trap Mapping) — INI JANGKAR ANALISIS
+## 2. Pemetaan Likuiditas Ritel & Inducement (IDM)
 
-**2a. Retail Entry Zone** Level S&R, trendline, atau pola chart klasik yang sedang diawasi ritel, berdasarkan data candle mentah di atas. Arah bias entry ritel paling mungkin. [FAKTA + INFERENSI]
+- **2a. Retail Liquidity Proxy (Heuristik Mekanis):** Karena tidak ada data order book/visual chart, petakan proxy level mekanis (recent swing, equal highs/lows, round number, session high/low) tempat ritel kemungkinan masuk & menaruh SL. Jangan klaim sebagai posisi ritel aktual. [INFERENSI] / [SPEKULASI]
+- **2b. Inducement / Sweep Zone (IDM — Internal Liquidity):** Identifikasi klaster SL ritel terdekat di dalam Dealing Range yang menjadi target sapuan manipulatif (_stop hunt_ / _sweep zone_) terlebih dahulu sebagai pemicu sebelum mencari konfirmasi entry. [INFERENSI]
 
-**2b. Retail SL Placement (Heuristik)** Berdasarkan kebiasaan penempatan SL ritel (umumnya sedikit di luar swing high/low di 2a), proyeksikan lokasi presisi cluster SL tersebut. [INFERENSI]
+## 3. Draw on Liquidity (DOL) = Target Take Profit
 
-> ⚠️ Output dari 2b adalah **satu-satunya sumber** untuk liquidity pool di bagian 3.
+- Petakan pool likuiditas di sisi berlawanan sebagai **Draw on Liquidity (DOL / External Liquidity)** dengan menggabungkan & meranking: klaster SL ritel mayor (**SSL** di bawah / **BSL** di atas), `Equal Highs/Lows`, batas `Ref High/Low` (Recent/Extreme), dan `Unfilled FVG`.
+- Tetapkan pool ini sebagai **Target TP1 & TP2** (bukan titik entry). [FAKTA + INFERENSI]
 
-## 3. Pemetaan Likuiditas = Target Take Profit Kita
+## 4. Logika Kontra-Ritel & Status Konfirmasi Entry
 
-- Konversi cluster SL ritel dari **2b** menjadi **SSL** (jika di bawah current price) atau **BSL** (jika di atas).
-- Tetapkan pool ini sebagai **TP** — eksplisit BUKAN titik entry. [INFERENSI]
+Jelaskan skenario _liquidity sweep_ terhadap zona **Inducement (2b)** diikuti konfirmasi menuju **DOL (poin 3)**. Pilih salah satu status setup berikut secara eksplisit:
 
-## 4. Logika Kontra-Ritel & Konfirmasi Entry
-
-- Jelaskan skenario _liquidity sweep / stop hunt_ terhadap level 2a-2b menuju pool di poin 3, berdasarkan sequence candle mentah di atas. [SPEKULASI]
-- Entry HANYA dikonfirmasi setelah manipulasi terjadi, via: CHoCH, MSS, FVG, atau OB — identifikasi dari tabel candle mentah di atas. [FAKTA setelah terjadi]
+- **Tipe A — `ACTIVE / TRIGGERED` `[FAKTA]`:** Jika _sweep_ (`wick_sweep` / `reclaim_sweep`) pada IDM + konfirmasi LTF (**MSS/CHoCH**, **FVG**, atau **OB**) sudah terbentuk pada data candle tertutup di atas.
+- **Tipe B — `PENDING / CONDITIONAL` `[INFERENSI]`:** Jika harga baru mendekati zona IDM atau _trigger_ belum terkonfirmasi pada candle tertutup; sebutkan syarat _sweep_ + _close_ **MSS/CHoCH** spesifik yang wajib ditunggu sebelum entry dieksekusi.
 
 ## 5. Trading Plan
 
@@ -157,22 +158,23 @@ Isi tabel di bawah. Setiap baris bertanda "Alasan" WAJIB diberi justifikasi yang
 | Parameter | Nilai |
 |---|---|
 | Bias | Bullish / Bearish |
+| Status Setup | ACTIVE (Triggered) / PENDING (Conditional) |
 | Entry | [level + kondisi konfirmasi] |
 | Alasan Entry | [justifikasi berbasis data di atas + label [FAKTA]/[INFERENSI]/[SPEKULASI]] |
 | Stop Loss | [level spesifik] |
-| Alasan SL | [justifikasi penempatan SL, mis. di luar swing/invalidasi struktur] |
-| TP1 | [level spesifik = pool dari poin 3] |
+| Alasan SL | [invalidasi struktur di luar swing/sweep + buffer spread/taker fee ~0.05%–0.10%] |
+| Jarak Risiko (1R) | [|Entry - SL| = nominal poin (X.XX% dari Entry) → Pos Size = Risk($) / X.XX%] |
+| TP1 | [level spesifik = pool DOL terdekat dari poin 3] |
 | R multiple TP1 | [mis. 2.0R — jelaskan dasar angka R ini] |
-| Alasan TP1 | [pool likuiditas / FVG yang dituju] |
-| TP2 | [level spesifik = pool likuiditas berikutnya] |
+| Alasan TP1 | [pool likuiditas DOL / Unfilled FVG yang dituju] |
+| TP2 | [level spesifik = pool DOL berikutnya dari poin 3] |
 | R multiple TP2 | [mis. 3.5R — jelaskan dasar angka R ini] |
-| Alasan TP2 | [pool likuiditas / level berikutnya yang dituju] |
-| RRR aktual (TP1) | [dihitung dari R multiple TP1] |
-| RRR aktual (TP2) | [dihitung dari R multiple TP2] |
+| Alasan TP2 | [pool likuiditas DOL / level berikutnya yang dituju] |
 
 **Aturan RRR:** Jika RRR < 1:2 → nyatakan eksplisit dan turunkan confidence. Jika tidak ada setup jelas → **"NO VALID SETUP — wait for clearer structure"** adalah jawaban sah.
 
-## 6. Kesimpulan & Confidence Level
+## 6. Kesimpulan, Rubrik Confidence & Invalidasi
 
-- Probabilitas setup: Low / Medium / High.
-- Skenario invalidasi.
+- **Skor Konfluensi (0–5):** (+1) HTF DOL searah | (+1) Harga di zona Premium/Discount MTF yang tepat thd EQ 50% | (+1) Sweep Inducement (IDM) jelas | (+1) Konfluensi POI LTF (FVG/OB/MSS) & sesi Killzone/Volume | (+1) RRR TP1 ≥ 1:2.
+- **Confidence Level:** High (4–5 poin) / Medium (3 poin) / Low (≤2 poin → wajib pertimbangkan NO VALID SETUP).
+- **Invalidasi & Skenario Flip (1 Kalimat):** Level harga spesifik yang membatalkan setup ini beserta syarat singkat jika struktur berbalik arah (flip bias).

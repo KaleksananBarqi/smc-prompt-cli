@@ -671,3 +671,60 @@ def test_order_block_in_prompt_template(tmp_path: Path) -> None:
     assert "### Order Block Aktif LTF" in prompt
     assert "Order Block Aktif:" in prompt
 
+
+def test_smc_v2_prompt_instructions_restructuring(tmp_path: Path) -> None:
+    """Pastikan struktur instruksi analisis v2 (Ticket #34) termuat lengkap di prompt."""
+    prompt = cli.run(
+        "BTCUSDT",
+        htf_candles=60,
+        mtf_candles=120,
+        ltf_candles=100,
+        output_dir=str(tmp_path),
+        input_csv=str(HTF_CSV),
+        htf_file=str(HTF_CSV),
+        mtf_file=str(MTF_CSV),
+        ltf_file=str(LTF_CSV),
+    ).prompt
+
+    # 1. Definisi Tabel wajib memuat MSS / CHoCH
+    assert "**MSS / CHoCH (Market Structure Shift):**" in prompt
+
+    # 2. Bagian 1 wajib memuat aturan hierarki dan resolusi konflik HTF > MTF > LTF
+    assert "## 1. Multi-Timeframe Alignment (HTF, MTF & LTF)" in prompt
+    assert "**Hierarki & Resolusi Konflik:**" in prompt
+    assert "`HTF > MTF > LTF`" in prompt
+
+    # 3. Bagian 2 wajib memisahkan Retail Liquidity Proxy (2a) dan Inducement / IDM (2b)
+    assert "## 2. Pemetaan Likuiditas Ritel & Inducement (IDM)" in prompt
+    assert "2a. Retail Liquidity Proxy (Heuristik Mekanis)" in prompt
+    assert "2b. Inducement / Sweep Zone (IDM — Internal Liquidity)" in prompt
+    assert "satu-satunya sumber" not in prompt
+
+    # 4. Bagian 3 wajib mendefinisikan Draw on Liquidity (DOL) dengan ranking sumber
+    assert "## 3. Draw on Liquidity (DOL) = Target Take Profit" in prompt
+    assert "Draw on Liquidity (DOL / External Liquidity)" in prompt
+    assert "Equal Highs/Lows" in prompt
+    assert "Unfilled FVG" in prompt
+
+    # 5. Bagian 4 wajib membedakan Tipe A (ACTIVE / TRIGGERED) dan Tipe B (PENDING / CONDITIONAL)
+    assert "## 4. Logika Kontra-Ritel & Status Konfirmasi Entry" in prompt
+    assert "Tipe A — `ACTIVE / TRIGGERED` `[FAKTA]`" in prompt
+    assert "Tipe B — `PENDING / CONDITIONAL` `[INFERENSI]`" in prompt
+
+    # 6. Bagian 5 wajib memuat Status Setup, buffer spread/fee SL, Jarak Risiko (1R), dan menghapus RRR aktual
+    assert "| Status Setup | ACTIVE (Triggered) / PENDING (Conditional) |" in prompt
+    assert "0.05%–0.10%" in prompt
+    assert "| Jarak Risiko (1R) |" in prompt
+    assert "Pos Size = Risk($) / X.XX%" in prompt
+    assert "RRR aktual (TP1)" not in prompt
+    assert "RRR aktual (TP2)" not in prompt
+
+    # 7. Bagian 6 wajib memuat Rubrik Skor Konfluensi (0-5), Confidence Level, dan Invalidasi & Skenario Flip
+    assert "## 6. Kesimpulan, Rubrik Confidence & Invalidasi" in prompt
+    assert "**Skor Konfluensi (0–5):**" in prompt
+    assert "High (4–5 poin)" in prompt
+    assert "Medium (3 poin)" in prompt
+    assert "Low (≤2 poin" in prompt
+    assert "**Invalidasi & Skenario Flip (1 Kalimat):**" in prompt
+
+
