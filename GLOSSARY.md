@@ -13,7 +13,35 @@ Fair Value Gap mekanis (pola 3-candle) yang belum pernah tersentuh atau tertembu
 Fair Value Gap yang telah tertembus (*filled*), namun penembusannya terjadi baru saja pada $\le 3$ candle terakhir dari deret data tertutup. Informasi ini dipertahankan sebagai konteks mitigasi likuiditas terkini bagi model AI.
 
 ### Compact Timestamp
-Format penulisan waktu ringkas tanpa prefiks tahun (`MM-DD` untuk timeframe Daily/HTF, `MM-DD HH:MM` untuk timeframe intraday MTF/LTF) pada tabel data prompt. Tahun referensi utama tetap tercatat di header dokumen (`Waktu generate (UTC)`).
+Format penulisan waktu ringkas tanpa prefiks tahun yang ditentukan berdasarkan durasi interval: `MM-DD` untuk timeframe harian ke atas ($\ge 1\text{d}$) dan `MM-DD HH:MM` untuk seluruh timeframe intraday ($< 1\text{d}$, termasuk `4h`, `1h`, `15m`). Tahun referensi utama tetap tercatat di header dokumen (`Waktu generate (UTC)`).
+
+### Dealing Range
+Rentang kerja harga aktif pada suatu timeframe yang dibentuk secara mekanis oleh pasangan *Recent Swing Low* dan *Recent Swing High* terakhir yang terdeteksi fraktal.
+_Avoid_: Trading Range, Price Channel, Consolidation Box.
+
+### Equilibrium (EQ)
+Titik tengah (level 50%) dari suatu *Dealing Range* (`eq = (recent_low + recent_high) / 2`) yang membagi rentang harga menjadi zona *Premium* (di atas EQ, ideal untuk mencari peluang *Short*) dan zona *Discount* (di bawah EQ, ideal untuk mencari peluang *Long*).
+_Avoid_: Midpoint, Fair Price, Halfway Level.
+
+### Inducement (IDM)
+Likuiditas internal (*Internal Range Liquidity*) berupa klaster Stop Loss ritel terdekat atau level swing minor yang menjadi target sapuan manipulatif (*sweep zone*) untuk memicu likuiditas sebelum harga berbalik arah dan memberikan konfirmasi *entry*.
+_Avoid_: Entry Pool, Minor Support/Resistance, Trap Level.
+
+### Draw on Liquidity (DOL)
+Likuiditas eksternal (*External Range Liquidity*) atau inefisiensi harga di sisi berlawanan—mencakup klaster Stop Loss ritel mayor, *Equal Highs/Lows*, batas *Dealing Range*, atau *Unfilled FVG*—yang menjadi magnet tujuan akhir harga sekaligus target *Take Profit* (TP1/TP2).
+_Avoid_: Final Target, Resistance/Support Target, Exit Zone.
+
+### Market Structure Shift (MSS)
+Perubahan arah struktur pasar awal (*Change of Character / CHoCH*) yang terkonfirmasi ketika candlestick berhasil *close* melampaui level swing berlawanan terakhir setelah terjadinya *liquidity sweep* pada zona *Inducement*.
+_Avoid_: Trend Reversal, Early BOS.
+
+### Killzone
+Jendela waktu sesi perdagangan institusional berbasis UTC tempat manipulasi likuiditas (*judas swing*) dan ekspansi harga paling sering terjadi, dipetakan secara deterministik menjadi: *Asia Session* (`00:00–06:59 UTC`), *London Open Killzone* (`07:00–09:59 UTC`), *London Session / Pre-NY* (`10:00–11:59 UTC`), *New York Open Killzone* (`12:00–14:59 UTC`), *London Close / NY Afternoon* (`15:00–19:59 UTC`), dan *Late NY / Off-Session* (`20:00–23:59 UTC`).
+_Avoid_: Trading Hours, Market Open, Timezone Window.
+
+### SMT Divergence
+Ketidakselarasan struktur swing (*Smart Money Technique Divergence*) antara aset yang dianalisis (seperti altcoin) dan aset acuan berkorelasi tinggi (`BTCUSDT`) pada titik waktu yang setara—misalnya ketika satu aset mencetak *Higher High* sementara aset acuan gagal menembus *Swing High* sebelumnya—yang mengindikasikan kejenuhan tren atau sapuan likuiditas.
+_Avoid_: Indicator Divergence, Correlation Lag.
 
 ### Order Block (OB)
 Candlestick berbasis zona penumpukan likuiditas institusional (*base candle*) sebelum terjadinya *rally* atau *drop* eksplosif (*displacement*). Ditetapkan secara deterministik hanya jika diikuti oleh terbentuknya Fair Value Gap (FVG-Linked OB) dengan ukuran gap $\ge 0.1 \times \text{ATR}$.
