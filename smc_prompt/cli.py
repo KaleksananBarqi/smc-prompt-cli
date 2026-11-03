@@ -30,7 +30,7 @@ from .errors import (
     exit_code_for,
 )
 from .gate_source import GateSource
-from .market_context import fetch_derivatives_context
+from .market_context import fetch_btc_benchmark_context, fetch_derivatives_context
 from .mexc_source import MexcSource
 from .models import Candle
 from .oanda_source import OandaSource
@@ -1046,6 +1046,7 @@ def run(
     # frozen template stays provider-agnostic while the provenance line always
     # names the source that actually produced the data.
     derivatives_context_line = ""
+    btc_benchmark_line = ""
     if (
         not offline_mode
         and config.provider in cfg.CRYPTO_FAILOVER_CHAIN
@@ -1054,6 +1055,7 @@ def run(
                 fetcher, (DataFetcher, BitunixSource, MexcSource, GateSource)
             )
             or hasattr(fetcher, "fetch_derivatives_info")
+            or hasattr(fetcher, "fetch_btc_benchmark_info")
         )
     ):
         try:
@@ -1065,11 +1067,21 @@ def run(
         except (Exception, AssertionError):
             derivatives_context_line = ""
 
+        try:
+            btc_benchmark_line = fetch_btc_benchmark_context(
+                config,
+                active_fetcher=fetcher,
+                offline_mode=offline_mode,
+            )
+        except (Exception, AssertionError):
+            btc_benchmark_line = ""
+
     rendered = render(
         payload,
         include_atr=config.include_atr,
         provider_name=config.provider_label,
         derivatives_context_line=derivatives_context_line,
+        btc_benchmark_line=btc_benchmark_line,
     )
     prompt_text = rendered.text
 
