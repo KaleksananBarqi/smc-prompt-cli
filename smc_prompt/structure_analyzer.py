@@ -879,6 +879,30 @@ def format_ref_summary(
     return f"- Ref {type_label}: " + " | ".join(parts)
 
 
+def format_dealing_range_summary(
+    current_price: Decimal,
+    recent_low: SwingPoint,
+    recent_high: SwingPoint,
+    *,
+    price_format: cfg.PriceFormat | None = None,
+) -> str:
+    """Format baris ringkasan Dealing Range mekanis beserta Equilibrium (EQ) 50% dan zona valuasi harga."""
+
+    pf = price_format or cfg.PriceFormat()
+    fmt = pf.fmt
+    eq = (recent_low.price + recent_high.price) / Decimal("2")
+    if current_price < eq:
+        zone = "DISCOUNT"
+    elif current_price > eq:
+        zone = "PREMIUM"
+    else:
+        zone = "AT EQ"
+    return (
+        f"- Dealing Range (Recent): {fmt(recent_low.price)}–{fmt(recent_high.price)} "
+        f"| EQ (50%): {fmt(eq)} (posisi harga: {zone})"
+    )
+
+
 def build_reference_facts(
     current_price: Decimal,
     *,
@@ -935,6 +959,12 @@ def build_reference_facts(
         atr=atr,
         price_format=price_format,
     )
+    dealing_range_summary = format_dealing_range_summary(
+        current_price,
+        recent_low,
+        recent_high,
+        price_format=price_format,
+    )
 
     return ReferenceFacts(
         recent_high=_format_reference(
@@ -989,6 +1019,7 @@ def build_reference_facts(
         ),
         ref_high_summary=ref_high_summary,
         ref_low_summary=ref_low_summary,
+        dealing_range_summary=dealing_range_summary,
     )
 
 

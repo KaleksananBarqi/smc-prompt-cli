@@ -493,7 +493,7 @@ def test_required_placeholders_all_resolved_for_three_tiers() -> None:
     payload = _three_tier_payload()
     mtf_keys = [key for key in REQUIRED_PLACEHOLDERS if key.startswith("MTF_")]
 
-    assert len(mtf_keys) == 15
+    assert len(mtf_keys) == 16
     assert all(key in payload for key in mtf_keys)
     assert all(str(payload[key]).strip() for key in mtf_keys)
     assert "MTF_ATR14" in payload

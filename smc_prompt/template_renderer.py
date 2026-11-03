@@ -34,6 +34,7 @@ from .models import (
     SwingType,
     TimeframeAnalysis,
 )
+from .structure_analyzer import format_dealing_range_summary
 
 TEMPLATE_PACKAGE = "smc_prompt"
 TEMPLATE_DIR = "templates"
@@ -488,11 +489,16 @@ def build_payload(
     payload: dict[str, str] = {
         "PAIR": symbol.upper(),
         "GENERATED_AT_UTC": cfg.fmt_generated_at(generated_at),
+        "SESSION_KILLZONE_UTC": cfg.fmt_session_killzone(generated_at),
         "CURRENT_PRICE": fmt(current_price),
         "ATR_PCT_OF_PRICE": _atr_pct_of_price(htf, current_price),
         "HTF_STRUCTURE_CLASS": htf.structure_class.value,
         "HTF_REF_HIGH_SUMMARY": htf_facts.ref_high_summary or f"- Ref HIGH: {htf_facts.recent_high}",
         "HTF_REF_LOW_SUMMARY": htf_facts.ref_low_summary or f"- Ref LOW: {htf_facts.recent_low}",
+        "HTF_DEALING_RANGE": htf_facts.dealing_range_summary
+        or format_dealing_range_summary(
+            current_price, htf.swing_low, htf.swing_high, price_format=price_format
+        ),
         "HTF_VOLUME_RELATIVE": _volume_relative(htf),
         "HTF_VOLUME_SPIKE": _volume_spike(htf),
         "HTF_INTERVAL_LABEL": config.htf_interval_label,
@@ -526,6 +532,10 @@ def build_payload(
         "MTF_STRUCTURE_CLASS": mtf.structure_class.value,
         "MTF_REF_HIGH_SUMMARY": mtf_facts.ref_high_summary or f"- Ref HIGH: {mtf_facts.recent_high}",
         "MTF_REF_LOW_SUMMARY": mtf_facts.ref_low_summary or f"- Ref LOW: {mtf_facts.recent_low}",
+        "MTF_DEALING_RANGE": mtf_facts.dealing_range_summary
+        or format_dealing_range_summary(
+            current_price, mtf.swing_low, mtf.swing_high, price_format=price_format
+        ),
         "MTF_VOLUME_RELATIVE": _volume_relative(mtf),
         "MTF_VOLUME_SPIKE": _volume_spike(mtf),
         "MTF_INTERVAL_LABEL": config.mtf_interval_label,
@@ -559,6 +569,10 @@ def build_payload(
         "LTF_STRUCTURE_CLASS": ltf.structure_class.value,
         "LTF_REF_HIGH_SUMMARY": ltf_facts.ref_high_summary or f"- Ref HIGH: {ltf_facts.recent_high}",
         "LTF_REF_LOW_SUMMARY": ltf_facts.ref_low_summary or f"- Ref LOW: {ltf_facts.recent_low}",
+        "LTF_DEALING_RANGE": ltf_facts.dealing_range_summary
+        or format_dealing_range_summary(
+            current_price, ltf.swing_low, ltf.swing_high, price_format=price_format
+        ),
         "LTF_VOLUME_RELATIVE": _volume_relative(ltf),
         "LTF_VOLUME_SPIKE": _volume_spike(ltf),
         "LTF_INTERVAL_LABEL": config.ltf_interval_label,
