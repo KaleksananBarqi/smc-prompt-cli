@@ -12,6 +12,10 @@ Fair Value Gap mekanis (pola 3-candle) yang belum pernah tersentuh atau tertembu
 ### Recently Mitigated FVG
 Fair Value Gap yang telah tertembus (*filled*), namun penembusannya terjadi baru saja pada $\le 3$ candle terakhir dari deret data tertutup. Informasi ini dipertahankan sebagai konteks mitigasi likuiditas terkini bagi model AI.
 
+### Consequent Encroachment (CE)
+Titik tengah (level 50%) dari rentang suatu Fair Value Gap (`ce = (lower + upper) / 2`). Berfungsi sebagai level keseimbangan internal inefisiensi harga dan acuan penempatan *Moderate Entry* (`Entry 2`).
+_Avoid_: FVG Midpoint, Gap Halfway, 50% Gap.
+
 ### Compact Timestamp
 Format penulisan waktu ringkas tanpa prefiks tahun yang ditentukan berdasarkan durasi interval: `MM-DD` untuk timeframe harian ke atas ($\ge 1\text{d}$) dan `MM-DD HH:MM` untuk seluruh timeframe intraday ($< 1\text{d}$, termasuk `4h`, `1h`, `15m`). Tahun referensi utama tetap tercatat di header dokumen (`Waktu generate (UTC)`).
 
@@ -24,7 +28,7 @@ Titik tengah (level 50%) dari suatu *Dealing Range* (`eq = (recent_low + recent_
 _Avoid_: Midpoint, Fair Price, Halfway Level.
 
 ### Inducement (IDM)
-Likuiditas internal (*Internal Range Liquidity*) berupa klaster Stop Loss ritel terdekat atau level swing minor yang menjadi target sapuan manipulatif (*sweep zone*) untuk memicu likuiditas sebelum harga berbalik arah dan memberikan konfirmasi *entry*.
+Likuiditas internal (*Internal Range Liquidity*) berupa klaster Stop Loss ritel terdekat atau level swing minor yang menjadi target sapuan manipulatif (*sweep zone*). Berfungsi sebagai syarat pemicu wajib sebelum konfirmasi *entry* pada skema *Sweep / Reversal* (saat struktur LTF belum searah), namun bersifat opsional untuk dilompati pada skema *Trend Continuation* ketika struktur MTF dan LTF sudah selaras dengan bias HTF dan memiliki POI dekat yang belum termitigasi.
 _Avoid_: Entry Pool, Minor Support/Resistance, Trap Level.
 
 ### Draw on Liquidity (DOL)
@@ -48,6 +52,18 @@ Candlestick berbasis zona penumpukan likuiditas institusional (*base candle*) se
 
 ### Mean Threshold (MT)
 Titik tengah (level 50%) dari rentang suatu Order Block (`mt = (low + high) / 2`). Berfungsi sebagai batas reaksi kritis di mana penetrasi harga melebihi MT mengindikasikan melemahnya kekuatan penolakan zona OB.
+
+### Proximal Edge
+Batas terluar dari suatu zona Point of Interest (FVG atau Order Block) yang paling dekat dengan harga pasar saat ini—yaitu batas atas (`upper`) pada zona *Bullish* dan batas bawah (`lower`) pada zona *Bearish*—yang menjadi titik acuan dasar bagi penempatan *Aggressive Entry* (`Entry 1`).
+_Avoid_: Outer Boundary, Near Edge, Upper/Lower Lip.
+
+### Front-Run Buffer
+Bantalan harga berbasis volatilitas (`0.10 × ATR(14) LTF`) yang ditambahkan di depan *Proximal Edge* suatu zona POI (ditambahkan di atas `upper` untuk *Long*, dikurangkan di bawah `lower` untuk *Short*) guna mengantisipasi pembalikan harga prematur (*front-run*) sebelum menyentuh batas mekanis zona.
+_Avoid_: Spread Padding, Entry Offset, Fudge Factor.
+
+### Blended Entry
+Harga masuk rata-rata tertimbang (`(0.4 × Entry 1) + (0.6 × Entry 2)`) dari skema dua tingkat harga (*Aggressive* dan *Moderate*) yang digunakan sebagai titik acuan tunggal dalam perhitungan jarak risiko (`1R`) dan kelayakan *Risk-to-Reward Ratio* (RRR) menuju target *Draw on Liquidity* (TP1/TP2).
+_Avoid_: Average Fill, Split Midpoint, Composite Entry.
 
 ### Wick Sweep
 Penolakan manipulatif 1-candle (*1-Candle Rejection*) di mana *wick* candlestick sempat menembus level Swing High atau Swing Low terdahulu, tetapi *body close* kembali ke dalam rentang level tersebut.

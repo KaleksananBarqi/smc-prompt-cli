@@ -127,6 +127,7 @@ class FVG:
     open time of the 3rd candle (the gap-closing candle). ``filled`` is True when
     a later closed candle trades FULLY through the range: for a bullish gap when
     a later ``low <= lower``, for a bearish gap when a later ``high >= upper``.
+    ``ce`` is the 50% Consequent Encroachment (midpoint) of the gap.
     """
 
     direction: FVGDirection
@@ -136,6 +137,14 @@ class FVG:
     filled: bool
     index: int = 0
     mitigated_index: int | None = None
+    ce: Decimal | None = None
+
+    def __post_init__(self) -> None:
+        """Hitung Consequent Encroachment (50% midpoint) otomatis bila belum diisi."""
+        if self.ce is None:
+            object.__setattr__(
+                self, "ce", (self.lower + self.upper) / Decimal("2")
+            )
 
 
 @dataclass(frozen=True)

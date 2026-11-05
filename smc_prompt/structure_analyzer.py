@@ -525,6 +525,7 @@ def detect_fvg(
         filled, mitigated_idx = _fvg_mitigation(
             candles, i, direction, lower, upper
         )
+        ce = (lower + upper) / Decimal("2")
         fvgs.append(
             FVG(
                 direction=direction,
@@ -534,6 +535,7 @@ def detect_fvg(
                 filled=filled,
                 index=i,
                 mitigated_index=mitigated_idx,
+                ce=ce,
             )
         )
 

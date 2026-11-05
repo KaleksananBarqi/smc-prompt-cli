@@ -453,8 +453,8 @@ def test_short_labels_in_swings_and_fvg() -> None:
     ]
     # Total candles = 5 -> mitigated_index 4 is in the last 3 candles (4 >= 5 - 3 = 2)
     rendered_fvg = _render_fvg_table(fvgs, htf=True, limit=5, total_candles=5, price_format=pf)
-    assert "10-29,BULL,95.00,98.00,unfilled" in rendered_fvg
-    assert "10-29,BEAR,80.00,85.00,filled" in rendered_fvg
+    assert "10-29,BULL,95.00,98.00,96.50,unfilled" in rendered_fvg
+    assert "10-29,BEAR,80.00,85.00,82.50,filled" in rendered_fvg
 
     # If total candles = 10 -> mitigated_index 4 is old (4 < 10 - 3 = 7), so filled is filtered out
     rendered_filtered = _render_fvg_table(fvgs, htf=True, limit=5, total_candles=10, price_format=pf)
@@ -705,13 +705,19 @@ def test_smc_v2_prompt_instructions_restructuring(tmp_path: Path) -> None:
     assert "Equal Highs/Lows" in prompt
     assert "Unfilled FVG" in prompt
 
-    # 5. Bagian 4 wajib membedakan Tipe A (ACTIVE / TRIGGERED) dan Tipe B (PENDING / CONDITIONAL)
-    assert "## 4. Logika Kontra-Ritel & Status Konfirmasi Entry" in prompt
+    # 5. Bagian 4 wajib membedakan Mode Eksekusi (Continuation vs Sweep) dan Tipe A/B
+    assert "## 4. Mode Eksekusi, Logika Kontra-Ritel & Status Konfirmasi Entry" in prompt
+    assert "Mode Continuation (Trend Kuat)" in prompt
+    assert "Mode Sweep / Reversal (Ranging/Counter)" in prompt
     assert "Tipe A — `ACTIVE / TRIGGERED` `[FAKTA]`" in prompt
     assert "Tipe B — `PENDING / CONDITIONAL` `[INFERENSI]`" in prompt
 
-    # 6. Bagian 5 wajib memuat Status Setup, buffer spread/fee SL, Jarak Risiko (1R), dan menghapus RRR aktual
-    assert "| Status Setup | ACTIVE (Triggered) / PENDING (Conditional) |" in prompt
+    # 6. Bagian 5 wajib memuat Dual-Entry (Aggressive, Moderate, Blended Entry), buffer spread/fee SL, Jarak Risiko (1R)
+    assert "| Status Setup | ACTIVE (Triggered) / PENDING (Conditional)" in prompt
+    assert "| Entry 1 (Aggressive) |" in prompt
+    assert "| Entry 2 (Moderate) |" in prompt
+    assert "| Entry |" in prompt
+    assert "Blended Entry" in prompt
     assert "0.05%–0.10%" in prompt
     assert "| Jarak Risiko (1R) |" in prompt
     assert "Pos Size = Risk($) / X.XX%" in prompt
@@ -725,5 +731,71 @@ def test_smc_v2_prompt_instructions_restructuring(tmp_path: Path) -> None:
     assert "Medium (3 poin)" in prompt
     assert "Low (≤2 poin" in prompt
     assert "**Invalidasi & Skenario Flip (1 Kalimat):**" in prompt
+
+
+def test_adr0003_fvg_ce_and_poi_proximity_filter() -> None:
+    """Uji fitur ADR-0003: Consequent Encroachment (ce) dan filter jarak POI 5.0x ATR."""
+    from smc_prompt.models import OrderBlock
+    from smc_prompt.template_renderer import (
+        _is_within_poi_distance,
+        _render_ob_table,
+    )
+
+    dt = datetime(2026, 11, 4, 12, 0, tzinfo=timezone.utc)
+    pf = cfg.PriceFormat(tick_decimals=2)
+
+    # 1. Pastikan FVG otomatis menghitung ce
+    fvg = FVG(
+        direction=FVGDirection.BULLISH,
+        lower=Decimal("100.00"),
+        upper=Decimal("110.00"),
+        birth_time=dt,
+        filled=False,
+    )
+    assert fvg.ce == Decimal("105.00")
+
+    # 2. Uji fungsi _is_within_poi_distance
+    # Harga di dalam zona: dist = 0 <= 5.0 * 10
+    assert _is_within_poi_distance(Decimal("100"), Decimal("110"), Decimal("105"), Decimal("10"), Decimal("5.0")) is True
+    # Harga di 150: dist = 150 - 110 = 40 <= 50 (5.0 * 10) -> True
+    assert _is_within_poi_distance(Decimal("100"), Decimal("110"), Decimal("150"), Decimal("10"), Decimal("5.0")) is True
+    # Harga di 170: dist = 170 - 110 = 60 > 50 (5.0 * 10) -> False
+    assert _is_within_poi_distance(Decimal("100"), Decimal("110"), Decimal("170"), Decimal("10"), Decimal("5.0")) is False
+
+    # 3. Uji filter pada _render_fvg_table
+    fvgs = [
+        # Jauh: lower 10, upper 20, dist ke 100 adalah 80 > 50
+        FVG(direction=FVGDirection.BULLISH, lower=Decimal("10"), upper=Decimal("20"), birth_time=dt, filled=False),
+        # Dekat: lower 90, upper 95, dist ke 100 adalah 5 <= 50
+        FVG(direction=FVGDirection.BULLISH, lower=Decimal("90"), upper=Decimal("95"), birth_time=dt, filled=False),
+    ]
+    rendered = _render_fvg_table(
+        fvgs,
+        htf=False,
+        limit=5,
+        price_format=pf,
+        current_price=Decimal("100"),
+        atr=Decimal("10"),
+        max_atr_mult=Decimal("5.0"),
+    )
+    assert "90.00,95.00,92.50" in rendered
+    assert "10.00,20.00" not in rendered
+
+    # 4. Uji filter pada _render_ob_table
+    obs = [
+        OrderBlock(direction=FVGDirection.BULLISH, lower=Decimal("10"), upper=Decimal("20"), mt=Decimal("15"), birth_time=dt, status="unmitigated"),
+        OrderBlock(direction=FVGDirection.BULLISH, lower=Decimal("90"), upper=Decimal("95"), mt=Decimal("92.5"), birth_time=dt, status="unmitigated"),
+    ]
+    rendered_obs = _render_ob_table(
+        obs,
+        htf=False,
+        limit=5,
+        price_format=pf,
+        current_price=Decimal("100"),
+        atr=Decimal("10"),
+        max_atr_mult=Decimal("5.0"),
+    )
+    assert "90.00,95.00,92.50" in rendered_obs
+    assert "10.00,20.00" not in rendered_obs
 
 

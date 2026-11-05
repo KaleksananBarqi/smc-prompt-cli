@@ -18,7 +18,7 @@ Bertindaklah sebagai **Senior ICT/SMC Trading Analyst**. Analisis dilakukan meng
 >
 > **Definisi Tabel:**
 > - **Sequence Swing:** Kolom `stamp,tipe,level,label,status`. Tipe: `SH`=Swing High, `SL`=Swing Low. Label: `HH`=Higher High, `HL`=Higher Low, `LH`=Lower High, `LL`=Lower Low, `EQH`=Equal High, `EQL`=Equal Low, `-`=pertama. Status: `untested` (belum tersentuh), `wick_sweep` (wick menembus tapi close tertolak), `reclaim_sweep` (close tembus 1 candle lalu langsung reclaim di candle berikutnya), `pending_break` (baru 1 candle close menembus), `broken` (terkonfirmasi break structural ≥2 candle close berturut-turut).
-> - **FVG Mekanis:** Kolom `stamp,tipe,lower,upper,status`. Tipe: `BULL`=Bullish FVG, `BEAR`=Bearish FVG. Menampilkan gap `unfilled` (atau `filled` dalam <= 3 candle terakhir).
+> - **FVG Mekanis:** Kolom `stamp,tipe,lower,upper,ce,status`. Tipe: `BULL`=Bullish FVG, `BEAR`=Bearish FVG. `ce`=Consequent Encroachment (50% midpoint). Menampilkan gap `unfilled` (atau `filled` dalam <= 3 candle terakhir).
 > - **Order Block Aktif:** Kolom `stamp,tipe,lower,upper,mt,status`. Tipe: `BULL_OB`=Bullish OB, `BEAR_OB`=Bearish OB. `mt`=Mean Threshold (50% level). Status: `unmitigated` (belum tersentuh), `tapped` (wick masuk zona / menyentuh mt tapi body belum close menembus).
 > - **MSS / CHoCH (Market Structure Shift):** Penembusan candle close melampaui swing berlawanan terakhir pasca terjadinya liquidity sweep pada zona Inducement.
 > - **Candle Mentah:** Kolom `stamp,open,high,low,close,volume` (volume dibulatkan integer).
@@ -148,39 +148,47 @@ Hindari klaim absolut ("pasti", "dijamin", "akan"). Gunakan kalibrasi probabilit
 - Petakan pool likuiditas di sisi berlawanan sebagai **Draw on Liquidity (DOL / External Liquidity)** dengan menggabungkan & meranking: klaster SL ritel mayor (**SSL** di bawah / **BSL** di atas), `Equal Highs/Lows`, batas `Ref High/Low` (Recent/Extreme), dan `Unfilled FVG`.
 - Tetapkan pool ini sebagai **Target TP1 & TP2** (bukan titik entry). [FAKTA + INFERENSI]
 
-## 4. Logika Kontra-Ritel & Status Konfirmasi Entry
+## 4. Mode Eksekusi, Logika Kontra-Ritel & Status Konfirmasi Entry
 
-Jelaskan skenario _liquidity sweep_ terhadap zona **Inducement (2b)** diikuti konfirmasi menuju **DOL (poin 3)**. Pilih salah satu status setup berikut secara eksplisit:
+Pilih **Mode Eksekusi** berdasarkan keselarasan struktur MTF & LTF terhadap bias HTF:
+- **Mode Continuation (Trend Kuat):** Aktif jika MTF searah bias HTF, struktur LTF sudah searah **ATAU** mencetak `pending_break` / `broken` (BOS/MSS) searah bias, dan terdapat `Unfilled FVG` / `Unmitigated OB` LTF dekat harga saat ini (`≤ 1.5x ATR LTF`). Eksekusi **tidak wajib** menunggu _sweep_ IDM dalam.
+- **Mode Sweep / Reversal (Ranging/Counter):** Aktif jika struktur LTF belum searah bias; **wajib** menunggu `wick_sweep` / `reclaim_sweep` pada zona **Inducement (2b)** diikuti konfirmasi **MSS/CHoCH** LTF menuju **DOL (poin 3)**.
 
-- **Tipe A — `ACTIVE / TRIGGERED` `[FAKTA]`:** Jika _sweep_ (`wick_sweep` / `reclaim_sweep`) pada IDM + konfirmasi LTF (**MSS/CHoCH**, **FVG**, atau **OB**) sudah terbentuk pada data candle tertutup di atas.
-- **Tipe B — `PENDING / CONDITIONAL` `[INFERENSI]`:** Jika harga baru mendekati zona IDM atau _trigger_ belum terkonfirmasi pada candle tertutup; sebutkan syarat _sweep_ + _close_ **MSS/CHoCH** spesifik yang wajib ditunggu sebelum entry dieksekusi.
+Tetapkan salah satu **Status Setup** berikut secara eksplisit:
+- **Tipe A — `ACTIVE / TRIGGERED` `[FAKTA]`:** Syarat Mode Eksekusi terpilih sudah terpenuhi pada data candle tertutup di atas.
+- **Tipe B — `PENDING / CONDITIONAL` `[INFERENSI]`:** Harga masih menunggu _pullback_ ke POI atau menunggu syarat _sweep_ IDM + _close_ **MSS/CHoCH** spesifik pada candle tertutup.
 
-## 5. Trading Plan
+## 5. Trading Plan (Dual-Entry & Blended Reference)
 
-Isi tabel di bawah. Setiap baris bertanda "Alasan" WAJIB diberi justifikasi yang merujuk data di atas dan diberi label [FAKTA] / [INFERENSI] / [SPEKULASI] (aturan integritas pada bagian atas berlaku).
+Isi tabel di bawah menggunakan 2 tingkat harga entry (`Entry 1 — Aggressive` dan `Entry 2 — Moderate`) dengan **1 Stop Loss struktural yang sama**. Setiap baris bertanda "Alasan" WAJIB diberi justifikasi yang merujuk data di atas dan diberi label [FAKTA] / [INFERENSI] / [SPEKULASI] (aturan integritas pada bagian atas berlaku).
 
-**Definisi R:** `R = |Entry − Stop Loss|`. Untuk tiap target, `R multiple TPn = |TPn − Entry| / R`. Tunjukkan angka R yang eksplisit dan jelaskan **dasar** pemilihan angka R tersebut (mis. jarak ke pool likuiditas berikutnya, kelipatan ATR(14), atau struktur swing).
+- **Entry 1 (Aggressive — 40% Size / Opsi Agresif):** Batas terluar (_Proximal Edge_) FVG/OB LTF terdekat + _Front-Run Buffer_ `0.10x ATR(14) LTF` (Long: `upper + 0.10×ATR_LTF` | Short: `lower - 0.10×ATR_LTF`). **Guard Limit Order:** Untuk status `PENDING`, `Entry 1` tidak boleh melampaui `Current price` (Long: `≤ Current price`, Short: `≥ Current price`). RRR minimal ke TP1 dari Entry 1 adalah `1:1.2`.
+- **Entry 2 (Moderate — 60% Size / Opsi Moderat):** Level 50% _Consequent Encroachment_ (`ce` FVG), 50% _Mean Threshold_ (`mt` OB), atau zona pasca-_sweep_ IDM.
+- **Entry (Blended Entry):** Harga rata-rata tertimbang `(0.4 × Entry 1) + (0.6 × Entry 2)` sebagai titik acuan kalkulasi `1R` dan `RRR`.
+- **Definisi R:** `R = |Entry − Stop Loss|` (menggunakan baris `Entry` / Blended). Untuk tiap target, `R multiple TPn = |TPn − Entry| / R`. Tunjukkan angka R yang eksplisit dan jelaskan **dasar** pemilihan angka R tersebut (mis. jarak ke pool likuiditas berikutnya, kelipatan ATR(14), atau struktur swing).
 
 | Parameter | Nilai |
 |---|---|
 | Bias | Bullish / Bearish |
-| Status Setup | ACTIVE (Triggered) / PENDING (Conditional) |
-| Entry | [level + kondisi konfirmasi] |
-| Alasan Entry | [justifikasi berbasis data di atas + label [FAKTA]/[INFERENSI]/[SPEKULASI]] |
+| Status Setup | ACTIVE (Triggered) / PENDING (Conditional) — [Mode Continuation / Mode Sweep] |
+| Entry 1 (Aggressive) | [level spesifik = Proximal Edge POI + buffer 0.10x ATR LTF (40% size / Opsi Agresif)] |
+| Entry 2 (Moderate) | [level spesifik = 50% ce FVG / mt OB / post-sweep IDM (60% size / Opsi Moderat)] |
+| Entry | [level spesifik = Blended Entry (0.4×E1 + 0.6×E2) — acuan 1R & RRR] |
+| Alasan Entry | [justifikasi E1, E2, & kondisi konfirmasi berbasis data di atas + label [FAKTA]/[INFERENSI]/[SPEKULASI]] |
 | Stop Loss | [level spesifik] |
 | Jarak Risiko (1R) | [`|Entry - SL|` = nominal poin (X.XX% dari Entry) → Pos Size = Risk($) / X.XX%] |
 | Alasan SL | [invalidasi struktur di luar swing/sweep + buffer spread/taker fee ~0.05%–0.10%] |
 | TP1 | [level spesifik = pool DOL terdekat dari poin 3] |
-| R multiple TP1 | [mis. 2.0R — jelaskan dasar angka R ini] |
+| R multiple TP1 | [mis. 1.6R (Blended) / 1.2R (E1) — jelaskan dasar angka R ini] |
 | Alasan TP1 | [pool likuiditas DOL / Unfilled FVG yang dituju] |
-| TP2 | [level spesifik = pool DOL berikutnya dari poin 3] |
-| R multiple TP2 | [mis. 3.5R — jelaskan dasar angka R ini] |
-| Alasan TP2 | [pool likuiditas DOL / level berikutnya yang dituju] |
+| TP2 | [level spesifik = pool DOL utama berikutnya dari poin 3] |
+| R multiple TP2 | [mis. 2.5R (Blended) — jelaskan dasar angka R ini] |
+| Alasan TP2 | [pool likuiditas DOL utama / level berikutnya yang dituju] |
 
-**Aturan RRR:** Jika RRR < 1:2 → nyatakan eksplisit dan turunkan confidence. Jika tidak ada setup jelas → **"NO VALID SETUP — wait for clearer structure"** adalah jawaban sah.
+**Aturan RRR:** Syarat konfluensi `RRR ≥ 1:2` dihitung menggunakan jarak **Entry (Blended) ke TP2 (Main DOL)**, dengan batas kelayakan minimum **TP1 ≥ 1:1.2 (dari Entry 1) atau ≥ 1:1.5 (dari Entry Blended)**. Jangan menekan `Entry 1` terlalu dalam hanya demi memaksakan angka 2R pada TP1. Jika RRR di bawah ambang tersebut → nyatakan eksplisit dan turunkan confidence. Jika tidak ada setup jelas → **"NO VALID SETUP — wait for clearer structure"** adalah jawaban sah.
 
 ## 6. Kesimpulan, Rubrik Confidence & Invalidasi
 
-- **Skor Konfluensi (0–5):** (+1) HTF DOL searah | (+1) Harga di zona Premium/Discount MTF yang tepat thd EQ 50% | (+1) Sweep Inducement (IDM) jelas | (+1) Konfluensi POI LTF (FVG/OB/MSS) & sesi Killzone/Volume | (+1) RRR TP1 ≥ 1:2.
+- **Skor Konfluensi (0–5):** (+1) HTF DOL searah | (+1) Harga di zona Premium/Discount MTF yang tepat thd EQ 50% | (+1) Sweep IDM jelas (Mode Sweep) ATAU Alignment LTF + POI dekat ≤1.5x ATR (Mode Continuation) | (+1) Konfluensi POI LTF (FVG `ce`/OB `mt`/MSS) & sesi Killzone/Volume | (+1) RRR Blended ke TP2 (Main DOL) ≥ 1:2 (dengan TP1 ≥ 1:1.2 dari E1).
 - **Confidence Level:** High (4–5 poin) / Medium (3 poin) / Low (≤2 poin → wajib pertimbangkan NO VALID SETUP).
 - **Invalidasi & Skenario Flip (1 Kalimat):** Level harga spesifik yang membatalkan setup ini beserta syarat singkat jika struktur berbalik arah (flip bias).

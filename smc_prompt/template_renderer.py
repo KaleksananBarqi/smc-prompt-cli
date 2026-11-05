@@ -269,6 +269,28 @@ def _render_equal_levels(
     )
 
 
+def _is_within_poi_distance(
+    lower: Decimal,
+    upper: Decimal,
+    current_price: Decimal | None,
+    atr: Decimal | None,
+    max_atr_mult: Decimal | None,
+) -> bool:
+    """Periksa apakah rentang zona [lower, upper] berada dalam radius max_atr_mult × ATR dari current_price."""
+    if (
+        current_price is None
+        or atr is None
+        or atr <= 0
+        or max_atr_mult is None
+    ):
+        return True
+    if lower <= current_price <= upper:
+        dist = Decimal("0")
+    else:
+        dist = min(abs(current_price - lower), abs(current_price - upper))
+    return dist <= (max_atr_mult * atr)
+
+
 def _is_relevant_fvg(fvg: FVG, total_candles: int | None) -> bool:
     if not fvg.filled:
         return True
@@ -284,16 +306,28 @@ def _render_fvg_table(
     limit: int,
     total_candles: int | None = None,
     price_format: cfg.PriceFormat | None = None,
+    current_price: Decimal | None = None,
+    atr: Decimal | None = None,
+    max_atr_mult: Decimal | None = None,
 ) -> str:
     """Render the newest mechanical FVGs (oldest -> newest within the window).
 
-    Row format: ``<stamp>,<BULL|BEAR>,<lower>,<upper>,<status>`` where
-    ``<stamp>`` is ``%m-%d`` (HTF) / ``%m-%d %H:%M`` (LTF) and ``<status>`` is
-    ``filled`` or ``unfilled``. Only unfilled gaps (or filled within the last
-    3 closed candles) are emitted, up to ``limit`` rows.
+    Row format: ``<stamp>,<BULL|BEAR>,<lower>,<upper>,<ce>,<status>`` where
+    ``<stamp>`` is ``%m-%d`` (HTF) / ``%m-%d %H:%M`` (LTF), ``<ce>`` is the 50%
+    Consequent Encroachment midpoint, and ``<status>`` is ``filled`` or
+    ``unfilled``. Only unfilled gaps (or filled within the last 3 closed
+    candles) within the optional ATR distance threshold are emitted, up to
+    ``limit`` rows.
     """
 
-    relevant = [fvg for fvg in fvgs if _is_relevant_fvg(fvg, total_candles)]
+    relevant = [
+        fvg
+        for fvg in fvgs
+        if _is_relevant_fvg(fvg, total_candles)
+        and _is_within_poi_distance(
+            fvg.lower, fvg.upper, current_price, atr, max_atr_mult
+        )
+    ]
     if not relevant:
         return "NONE"
 
@@ -312,6 +346,11 @@ def _render_fvg_table(
             else "BEAR"
         )
         status = "filled" if fvg.filled else "unfilled"
+        ce_val = (
+            fvg.ce
+            if fvg.ce is not None
+            else (fvg.lower + fvg.upper) / Decimal("2")
+        )
         rows.append(
             ",".join(
                 [
@@ -319,6 +358,7 @@ def _render_fvg_table(
                     direction,
                     fmt(fvg.lower),
                     fmt(fvg.upper),
+                    fmt(ce_val),
                     status,
                 ]
             )
@@ -338,10 +378,20 @@ def _render_ob_table(
     limit: int = 5,
     total_candles: int | None = None,
     price_format: cfg.PriceFormat | None = None,
+    current_price: Decimal | None = None,
+    atr: Decimal | None = None,
+    max_atr_mult: Decimal | None = None,
 ) -> str:
     """Render active / recently-mitigated Order Blocks (oldest -> newest)."""
 
-    relevant = [ob for ob in obs if _is_relevant_ob(ob, total_candles)]
+    relevant = [
+        ob
+        for ob in obs
+        if _is_relevant_ob(ob, total_candles)
+        and _is_within_poi_distance(
+            ob.lower, ob.upper, current_price, atr, max_atr_mult
+        )
+    ]
     if not relevant:
         return "NONE"
 
@@ -582,6 +632,9 @@ def build_payload(
             limit=config.fvg_table_rows,
             total_candles=(mtf.closed_count or mtf.candle_count),
             price_format=price_format,
+            current_price=current_price,
+            atr=mtf.atr,
+            max_atr_mult=config.max_poi_atr_mult,
         ),
         "MTF_FVG_COUNT": str(config.fvg_table_rows),
         "MTF_OB_TABLE": _render_ob_table(
@@ -590,6 +643,9 @@ def build_payload(
             limit=config.ob_table_rows,
             total_candles=(mtf.closed_count or mtf.candle_count),
             price_format=price_format,
+            current_price=current_price,
+            atr=mtf.atr,
+            max_atr_mult=config.max_poi_atr_mult,
         ),
         "MTF_OB_COUNT": str(config.ob_table_rows),
         "LTF_STRUCTURE_CLASS": ltf.structure_class.value,
@@ -619,6 +675,9 @@ def build_payload(
             limit=config.fvg_table_rows,
             total_candles=(ltf.closed_count or ltf.candle_count),
             price_format=price_format,
+            current_price=current_price,
+            atr=ltf.atr,
+            max_atr_mult=config.max_poi_atr_mult,
         ),
         "LTF_FVG_COUNT": str(config.fvg_table_rows),
         "LTF_OB_TABLE": _render_ob_table(
@@ -627,6 +686,9 @@ def build_payload(
             limit=config.ob_table_rows,
             total_candles=(ltf.closed_count or ltf.candle_count),
             price_format=price_format,
+            current_price=current_price,
+            atr=ltf.atr,
+            max_atr_mult=config.max_poi_atr_mult,
         ),
         "LTF_OB_COUNT": str(config.ob_table_rows),
     }

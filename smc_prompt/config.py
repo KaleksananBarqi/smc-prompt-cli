@@ -396,6 +396,9 @@ DEFAULT_FVG_ATR_MULT: Decimal = Decimal("0.1")
 #: within the emitted window).
 DEFAULT_FVG_TABLE_ROWS: int = 8
 DEFAULT_OB_TABLE_ROWS: int = 5
+#: Batas jarak maksimum POI (FVG/OB) pada MTF dan LTF terhadap current_price
+#: dalam kelipatan ATR(14) timeframe terkait (ADR-0003).
+DEFAULT_MAX_POI_ATR_MULT: Decimal = Decimal("5.0")
 DEFAULT_CONTEXT_BUFFER: int = 50
 FETCH_LIMIT_MAX: int = 1000
 DEFAULT_REQUEST_TIMEOUT: float = 10.0
@@ -738,6 +741,7 @@ class Config:
     fvg_atr_mult: Decimal = DEFAULT_FVG_ATR_MULT
     fvg_table_rows: int = DEFAULT_FVG_TABLE_ROWS
     ob_table_rows: int = DEFAULT_OB_TABLE_ROWS
+    max_poi_atr_mult: Decimal = DEFAULT_MAX_POI_ATR_MULT
     context_buffer: int = DEFAULT_CONTEXT_BUFFER
     fetch_limit_max: int = FETCH_LIMIT_MAX
     request_timeout: float = DEFAULT_REQUEST_TIMEOUT
