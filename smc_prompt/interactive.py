@@ -171,7 +171,9 @@ def run_interactive_wizard() -> None:
 
         validate_setup = False
         entry_price: float | None = None
+        entry2_price: float | None = None
         tp_price: float | None = None
+        tp2_price: float | None = None
         sl_price: float | None = None
         order_status: str | None = None
         validate_interval = cfg.DEFAULT_VALIDATE_INTERVAL
@@ -295,9 +297,33 @@ def run_interactive_wizard() -> None:
 
         elif action == "validate":
             validate_setup = True
-            click.secho("[Langkah 4/5] Parameter Setup Validasi:", fg="yellow", bold=True)
-            entry_price = click.prompt("Harga Rencana Entry", type=float)
-            tp_price = click.prompt("Harga Target TP / DOL", type=float)
+            click.secho("[Langkah 4/5] Parameter Setup Validasi (SMC v2):", fg="yellow", bold=True)
+            entry_price = click.prompt("Harga Rencana Entry 1 (Aggressive / Proximal Edge)", type=float)
+            
+            e2_input = click.prompt(
+                "Harga Rencana Entry 2 (Moderate / 50% CE/MT, opsional - Enter jika single entry)",
+                default="",
+                show_default=False,
+            ).strip()
+            if e2_input:
+                try:
+                    entry2_price = float(e2_input)
+                except ValueError:
+                    entry2_price = None
+
+            tp_price = click.prompt("Harga Target TP1 (Nearest DOL)", type=float)
+
+            tp2_input = click.prompt(
+                "Harga Target TP2 (Main DOL, opsional - Enter jika tidak ada)",
+                default="",
+                show_default=False,
+            ).strip()
+            if tp2_input:
+                try:
+                    tp2_price = float(tp2_input)
+                except ValueError:
+                    tp2_price = None
+
             sl_input = click.prompt("Harga Stop Loss (opsional, kosongkan jika belum ada)", default="", show_default=False).strip()
             if sl_input:
                 try:
@@ -307,6 +333,7 @@ def run_interactive_wizard() -> None:
 
             status_opts = [
                 ("unfilled", "Belum Terjemput (Limit order pending di bursa)"),
+                ("partial", "Terisi Sebagian (Entry 1 aktif 40%, Entry 2 pending 60%)"),
                 ("filled", "Sudah Terjemput (Posisi sedang aktif / running)"),
             ]
             order_status = _prompt_choice("Status Order Anda:", status_opts, default_index=0)
@@ -364,11 +391,21 @@ def run_interactive_wizard() -> None:
             cli_parts.append("--validate-setup")
             if entry_price is not None:
                 cli_parts.append(f"--entry {entry_price}")
+            if entry2_price is not None:
+                cli_parts.append(f"--entry2 {entry2_price}")
             if tp_price is not None:
                 cli_parts.append(f"--tp {tp_price}")
+            if tp2_price is not None:
+                cli_parts.append(f"--tp2 {tp2_price}")
             if sl_price is not None:
                 cli_parts.append(f"--sl {sl_price}")
-            if order_status:
+            if order_status == "unfilled":
+                cli_parts.append("--unfilled")
+            elif order_status == "partial":
+                cli_parts.append("--partial")
+            elif order_status == "filled":
+                cli_parts.append("--filled")
+            elif order_status:
                 cli_parts.append(f"--order-status {order_status}")
             if validate_interval != cfg.DEFAULT_VALIDATE_INTERVAL:
                 cli_parts.append(f"--validate-interval {validate_interval}")
@@ -425,7 +462,9 @@ def run_interactive_wizard() -> None:
                 preview = review_notes if len(review_notes) <= 50 else review_notes[:47] + "..."
                 click.echo(f"  * Catatan        : {preview}")
         elif action == "validate":
-            click.echo(f"  * Setup Params   : Entry={entry_price}, TP={tp_price}, SL={sl_price or '-'}, Status={order_status}")
+            e2_desc = f", Entry2={entry2_price}" if entry2_price is not None else ""
+            tp2_desc = f", TP2={tp2_price}" if tp2_price is not None else ""
+            click.echo(f"  * Setup Params   : Entry1={entry_price}{e2_desc}, TP1={tp_price}{tp2_desc}, SL={sl_price or '-'}, Status={order_status}")
         click.echo(f"  * Output         : File di folder output/ & Otomatis Copy ke Clipboard")
         click.secho("-" * 70, fg="cyan")
         click.echo("  Tips: Perintah one-liner yang ekuivalen:")
@@ -488,6 +527,8 @@ def run_interactive_wizard() -> None:
             order_status=order_status,
             validate_interval=validate_interval,
             validate_candles=validate_candles,
+            entry2=entry2_price if action == "validate" else None,
+            tp2=tp2_price if action == "validate" else None,
         )
         click.secho("\n[+] Selesai! Prompt siap dipaste (Ctrl+V) ke AI kesayangan Anda.", fg="bright_green", bold=True)
 

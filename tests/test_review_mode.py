@@ -24,6 +24,7 @@ from smc_prompt.review_renderer import (
     compute_session_stats,
     render_review_markdown,
 )
+from smc_prompt.trade_plan import ExcursionResult
 from tests.conftest import HTF_CSV, LTF_CSV, MTF_CSV, make_candle
 
 
@@ -301,4 +302,61 @@ def test_cli_review_mode_with_journal_flags(tmp_path: Path) -> None:
     assert "- [x] **Hasil Akhir:** Hit TP" in text
     assert "- [x] **Evaluasi / Catatan:**" in text
     assert "> Reaksi FVG mantap" in text
+
+
+def test_render_review_markdown_dual_entry_and_excursion() -> None:
+    """Memverifikasi render review dengan dual-entry dan fakta ekskursi mekanis."""
+    candles = [
+        make_candle(0, high="102", low="99", open_="101", close="100"),
+        make_candle(1, high="112", low="98", open_="100", close="111"),
+    ]
+    exc = ExcursionResult(
+        mfe_price=Decimal("112.0"),
+        mfe_points=Decimal("12.0"),
+        mfe_r=Decimal("1.71"),
+        mae_price=Decimal("98.0"),
+        mae_points=Decimal("2.0"),
+        mae_r=Decimal("0.29"),
+        e1_filled=True,
+        e2_filled=False,
+        e1_fill_time=datetime(2026, 11, 6, 8, 0, tzinfo=timezone.utc),
+        e2_fill_time=None,
+        first_fill_time=datetime(2026, 11, 6, 8, 0, tzinfo=timezone.utc),
+        first_fill_killzone="London Open Killzone (07:00-10:00 UTC)",
+        first_touch_sequence=("tp1",),
+        sl_touched=False,
+        tp1_touched=True,
+        tp2_touched=False,
+    )
+    journal = TradeJournalSpec(
+        direction="long",
+        entry_price=Decimal("100.0"),
+        entry2_price=Decimal("95.0"),
+        sl_price=Decimal("93.0"),
+        tp_price=Decimal("110.0"),
+        tp2_price=Decimal("120.0"),
+        exit_price=Decimal("110.0"),
+        outcome="Hit TP",
+        filled_legs="e1",
+        excursion=exc,
+    )
+
+    md = render_review_markdown(
+        symbol="BTCUSDT",
+        interval="1h",
+        candles=candles,
+        provider_label="Binance",
+        journal=journal,
+        structure_block="### Konteks Struktur Pasar Mock",
+    )
+
+    assert "Level Entry (Dual-Entry):** Entry 1 (Aggressive) = 100" in md
+    assert "Entry 2 (Moderate) = 95" in md
+    assert "Take Profit (TP1):** 110" in md
+    assert "Take Profit (TP2 - Main DOL):** 120" in md
+    assert "Fakta Ekskursi Harga Mekanis" in md
+    assert "Maximum Favorable Excursion (MFE):** 112" in md
+    assert "Maximum Adverse Excursion (MAE):** 98" in md
+    assert "Urutan Sentuh Pertama (First-Touch):** TP1" in md
+    assert "Konteks Struktur Pasar Mock" in md
 

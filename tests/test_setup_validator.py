@@ -617,3 +617,61 @@ def test_cli_main_click_runner(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert "Setup validation prompt written to" in result.output
+
+
+def test_analyze_setup_dual_entry_unfilled_and_partial() -> None:
+    """Memverifikasi analisis setup dengan dual-entry dan status partial."""
+    setup_dual = SetupSpec(
+        symbol="BTCUSDT",
+        direction="long",
+        entry_price=Decimal("100.0"),
+        entry2_price=Decimal("95.0"),
+        sl_price=Decimal("90.0"),
+        tp_price=Decimal("110.0"),
+        tp2_price=Decimal("120.0"),
+        order_status="unfilled",
+    )
+    candles = [
+        make_candle(0, open_="103", high="104", low="101", close="102"),
+        make_candle(1, open_="102", high="105", low="101.5", close="103"),
+    ]
+    res_unfilled = analyze_setup(setup_dual, candles)
+    assert res_unfilled.status == "FRESH"
+    assert res_unfilled.is_unfilled is True
+    assert res_unfilled.e2_status != ""
+
+    # Status partial: E1 sudah terisi
+    setup_partial = SetupSpec(
+        symbol="BTCUSDT",
+        direction="long",
+        entry_price=Decimal("100.0"),
+        entry2_price=Decimal("95.0"),
+        sl_price=Decimal("90.0"),
+        tp_price=Decimal("110.0"),
+        tp2_price=Decimal("120.0"),
+        order_status="partial",
+    )
+    candles_partial = [
+        make_candle(0, open_="102", high="103", low="99", close="101"),  # E1 hit
+        make_candle(1, open_="101", high="105", low="100", close="104"),
+    ]
+    res_partial = analyze_setup(setup_partial, candles_partial)
+    assert res_partial.is_partial is True
+    assert res_partial.status == "PARTIAL_IN_PLAY"
+    assert "ENTRY 1 TERJEMPUT" in res_partial.entry_status
+
+    # Render prompt dengan dual-entry & multi-TP
+    prompt = render_validation_prompt(
+        analysis=res_partial,
+        candles=candles_partial,
+        setup=setup_partial,
+        interval="15m",
+        provider_label="Binance",
+        generated_at=datetime(2026, 11, 6, 8, 30, tzinfo=timezone.utc),
+    )
+    assert "Level Entry 1 (Aggressive):** 100" in prompt
+    assert "Level Entry 2 (Moderate):** 95" in prompt
+    assert "Blended Entry (Acuan 1R & RRR):** 97" in prompt
+    assert "Target TP1 (Nearest DOL):** 110" in prompt
+    assert "Target TP2 (Main DOL):** 120" in prompt
+    assert "PARTIAL FILL" in prompt
