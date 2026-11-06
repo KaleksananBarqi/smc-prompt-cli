@@ -14,6 +14,7 @@ import sys
 import click
 
 from . import config as cfg
+from .errors import SmcPromptError, exit_code_for
 
 
 def _banner() -> None:
@@ -298,38 +299,69 @@ def run_interactive_wizard() -> None:
         elif action == "validate":
             validate_setup = True
             click.secho("[Langkah 4/5] Parameter Setup Validasi (SMC v2):", fg="yellow", bold=True)
-            entry_price = click.prompt("Harga Rencana Entry 1 (Aggressive / Proximal Edge)", type=float)
-            
-            e2_input = click.prompt(
-                "Harga Rencana Entry 2 (Moderate / 50% CE/MT, opsional - Enter jika single entry)",
-                default="",
-                show_default=False,
-            ).strip()
-            if e2_input:
-                try:
-                    entry2_price = float(e2_input)
-                except ValueError:
+            while True:
+                entry_price = click.prompt("Harga Rencana Entry 1 (Aggressive / Proximal Edge)", type=float)
+
+                e2_input = click.prompt(
+                    "Harga Rencana Entry 2 (Moderate / 50% CE/MT, opsional - Enter jika single entry)",
+                    default="",
+                    show_default=False,
+                ).strip()
+                if e2_input:
+                    try:
+                        entry2_price = float(e2_input)
+                    except ValueError:
+                        entry2_price = None
+                else:
                     entry2_price = None
 
-            tp_price = click.prompt("Harga Target TP1 (Nearest DOL)", type=float)
+                tp_price = click.prompt("Harga Target TP1 (Nearest DOL)", type=float)
 
-            tp2_input = click.prompt(
-                "Harga Target TP2 (Main DOL, opsional - Enter jika tidak ada)",
-                default="",
-                show_default=False,
-            ).strip()
-            if tp2_input:
-                try:
-                    tp2_price = float(tp2_input)
-                except ValueError:
+                tp2_input = click.prompt(
+                    "Harga Target TP2 (Main DOL, opsional - Enter jika tidak ada)",
+                    default="",
+                    show_default=False,
+                ).strip()
+                if tp2_input:
+                    try:
+                        tp2_price = float(tp2_input)
+                    except ValueError:
+                        tp2_price = None
+                else:
                     tp2_price = None
 
-            sl_input = click.prompt("Harga Stop Loss (opsional, kosongkan jika belum ada)", default="", show_default=False).strip()
-            if sl_input:
-                try:
-                    sl_price = float(sl_input)
-                except ValueError:
+                sl_input = click.prompt("Harga Stop Loss (opsional, kosongkan jika belum ada)", default="", show_default=False).strip()
+                if sl_input:
+                    try:
+                        sl_price = float(sl_input)
+                    except ValueError:
+                        sl_price = None
+                else:
                     sl_price = None
+
+                # Verifikasi konsistensi hierarki harga secara proaktif
+                try:
+                    from .trade_plan import build_trade_plan
+                    build_trade_plan(
+                        entry1=entry_price,
+                        entry2=entry2_price,
+                        tp1=tp_price,
+                        tp2=tp2_price,
+                        sl=sl_price,
+                    )
+                    break
+                except SmcPromptError as err:
+                    click.echo("")
+                    click.secho(f"[!] Parameter setup tidak valid: {err}", fg="bright_red", bold=True)
+                    click.secho("    Tips: Pastikan jumlah digit/desimal konsisten dan posisi SL/TP logis terhadap Entry.", fg="yellow")
+                    retry = click.confirm(
+                        click.style("    Masukkan ulang parameter setup?", fg="bright_white", bold=True),
+                        default=True,
+                    )
+                    if not retry:
+                        click.secho("Proses dibatalkan oleh pengguna.", fg="yellow")
+                        return
+                    click.echo("")
 
             status_opts = [
                 ("unfilled", "Belum Terjemput (Limit order pending di bursa)"),
@@ -536,3 +568,11 @@ def run_interactive_wizard() -> None:
         click.echo("")
         click.secho("Operasi dibatalkan (Ctrl+C).", fg="yellow")
         sys.exit(0)
+    except SmcPromptError as exc:
+        click.echo("")
+        click.secho(f"[!] Error: {exc}", fg="bright_red", bold=True)
+        sys.exit(exit_code_for(exc))
+    except Exception as exc:  # pragma: no cover - defensive
+        click.echo("")
+        click.secho(f"[!] Kesalahan tak terduga: {exc}", fg="bright_red", bold=True)
+        sys.exit(1)

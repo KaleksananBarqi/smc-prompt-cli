@@ -145,7 +145,7 @@ def build_trade_plan(
         if t1 <= e1:
             raise ConfigError(f"Invalid LONG setup: TP ({t1}) must be strictly greater than Entry ({e1}).")
         if dec_sl is not None and dec_sl >= e1:
-            raise ConfigError("For long setups, --sl must be lower than --entry.")
+            raise ConfigError(f"For long setups, --sl must be lower than --entry (diberikan SL={dec_sl}, Entry={e1}).")
 
         if e2 is not None:
             if e2 > e1:
@@ -171,7 +171,7 @@ def build_trade_plan(
         if t1 >= e1:
             raise ConfigError(f"Invalid SHORT setup: TP ({t1}) must be strictly less than Entry ({e1}).")
         if dec_sl is not None and dec_sl <= e1:
-            raise ConfigError("For short setups, --sl must be higher than --entry.")
+            raise ConfigError(f"For short setups, --sl must be higher than --entry (diberikan SL={dec_sl}, Entry={e1}).")
 
         if e2 is not None:
             if e2 < e1:

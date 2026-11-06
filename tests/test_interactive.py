@@ -280,3 +280,100 @@ def test_interactive_wizard_twelvedata_prompts_when_missing_key(monkeypatch: pyt
         assert kwargs["provider"] == "twelvedata"
         assert kwargs["twelvedata_key"] == "manual-td-key"
 
+
+def test_interactive_wizard_validate_mode_successful() -> None:
+    with patch("smc_prompt.cli.run") as mock_run, \
+         patch("click.prompt") as mock_prompt, \
+         patch("click.confirm") as mock_confirm:
+
+        mock_prompt.side_effect = [
+            "1",         # Provider: Binance
+            "BTCUSDT",   # Symbol
+            "3",         # Action: Validasi Setup
+            75993.8,     # Entry 1
+            "76173.5",   # Entry 2
+            75158.5,     # TP1
+            "74909.4",   # TP2
+            "76330.0",   # SL
+            "1",         # Status: unfilled
+        ]
+        mock_confirm.side_effect = [
+            True,   # default validate interval (15m, 50)
+            False,  # print stdout
+            True,   # execute run
+        ]
+
+        interactive.run_interactive_wizard()
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[0] == "BTCUSDT"
+        assert kwargs["validate_setup"] is True
+        assert kwargs["entry"] == 75993.8
+        assert kwargs["entry2"] == 76173.5
+        assert kwargs["tp"] == 75158.5
+        assert kwargs["tp2"] == 74909.4
+        assert kwargs["sl"] == 76330.0
+        assert kwargs["order_status"] == "unfilled"
+
+
+def test_interactive_wizard_validate_mode_retries_on_invalid_setup() -> None:
+    with patch("smc_prompt.cli.run") as mock_run, \
+         patch("click.prompt") as mock_prompt, \
+         patch("click.confirm") as mock_confirm:
+
+        mock_prompt.side_effect = [
+            "1",         # Provider: Binance
+            "BTCUSDT",   # Symbol
+            "3",         # Action: Validasi Setup
+            # Putaran 1 (invalid: SL 76330 < Entry 759938)
+            759938.0,    # Entry 1 (typo)
+            "",          # Entry 2 (skip)
+            751585.0,    # TP1 (typo)
+            "",          # TP2 (skip)
+            "76330.0",   # SL
+            # Putaran 2 (valid)
+            75993.8,     # Entry 1
+            "",          # Entry 2
+            75158.5,     # TP1
+            "",          # TP2
+            "76330.0",   # SL
+            "1",         # Status: unfilled
+        ]
+        mock_confirm.side_effect = [
+            True,   # Masukkan ulang parameter setup? (retry = True)
+            True,   # default validate interval (15m, 50)
+            False,  # print stdout
+            True,   # execute run
+        ]
+
+        interactive.run_interactive_wizard()
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert kwargs["entry"] == 75993.8
+        assert kwargs["tp"] == 75158.5
+        assert kwargs["sl"] == 76330.0
+
+
+def test_interactive_wizard_handles_smc_prompt_error() -> None:
+    from smc_prompt.errors import ConfigError
+
+    with patch("smc_prompt.cli.run", side_effect=ConfigError("Invalid test config")), \
+         patch("click.prompt") as mock_prompt, \
+         patch("click.confirm") as mock_confirm:
+
+        mock_prompt.side_effect = [
+            "1",         # Provider: Binance
+            "BTCUSDT",   # Symbol
+            "1",         # Action: SMC/ICT prompt
+        ]
+        mock_confirm.side_effect = [
+            True,   # default timeframe
+            False,  # print stdout
+            True,   # execute run
+        ]
+
+        with pytest.raises(SystemExit) as exc_info:
+            interactive.run_interactive_wizard()
+        assert exc_info.value.code == 2
+
+

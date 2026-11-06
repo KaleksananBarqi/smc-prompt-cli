@@ -1726,7 +1726,13 @@ def main(
     # launch the interactive wizard.
     if interactive or (symbol is None and not dry_run):
         from .interactive import run_interactive_wizard
-        run_interactive_wizard()
+        try:
+            run_interactive_wizard()
+        except SmcPromptError as exc:
+            _error(str(exc))
+            if debug:
+                traceback.print_exc()
+            sys.exit(exit_code_for(exc))
         return
 
     resolved_symbol = "" if symbol is None else symbol
