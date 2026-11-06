@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pelajaran 0001: Memilih Timeframe untuk Swing, Intraday, dan Scalp</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="lesson-meta">Pelajaran 0001 • Tingkat Dasar Multi-Timeframe</div>
+      <h1>Menyelaraskan Timeframe: Swing, Intraday, &amp; Scalp</h1>
+      <p>Pelajari peran trio timeframe (HTF, MTF, LTF) dan cara memilih kombinasi yang tepat tanpa kebingungan sinyal bertentangan.</p>
+    </header>
+
+    <h2>Mengapa Kita Butuh Tiga Timeframe?</h2>
+    <p>
+      Kesalahan fatal trader pemula adalah mengamati hanya satu grafik (misalnya hanya 15 menit). Saat melihat pola pembalikan arah di satu timeframe, mereka sering kali tidak menyadari bahwa harga sebenarnya sedang menghantam Order Block raksasa di timeframe harian.
+    </p>
+    <p>
+      Untuk menghindari jebakan tersebut, kita menerapkan <strong>3-Tier Multi-Timeframe Alignment</strong>:
+    </p>
+    <ul>
+      <li><strong>Higher Timeframe (HTF):</strong> Menjawab pertanyaan <em>"Ke mana arah arus besar?"</em> (Macro Narrative &amp; Draw on Liquidity).</li>
+      <li><strong>Medium Timeframe (MTF):</strong> Menjawab pertanyaan <em>"Di mana area peluang yang valid?"</em> (Point of Interest / POI).</li>
+      <li><strong>Lower Timeframe (LTF):</strong> Menjawab pertanyaan <em>"Kapan tepatnya waktu untuk menembak?"</em> (Entry Trigger &amp; Market Structure Shift).</li>
+    </ul>
+
+    <h2>Matriks Rekomendasi Tiap Gaya</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Gaya Trading</th>
+          <th>HTF (Konteks Makro)</th>
+          <th>MTF (Struktur &amp; POI)</th>
+          <th>LTF (Pemicu Entri)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Swing Trading</strong></td>
+          <td>Weekly (1W) / Daily (1D)</td>
+          <td>Daily (1D) / 4H</td>
+          <td>4H / 1H</td>
+        </tr>
+        <tr>
+          <td><strong>Intraday Trading</strong></td>
+          <td>4H / Daily (1D)</td>
+          <td>1H</td>
+          <td>15m / 5m</td>
+        </tr>
+        <tr>
+          <td><strong>Scalping</strong></td>
+          <td>1H / 4H</td>
+          <td>15m / 5m</td>
+          <td>1m / 3m</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      <div class="callout-title">Aturan Rasio Fraktal 4x &ndash; 6x</div>
+      <p style="margin: 0;">
+        Pilihlah timeframe berjarak 4x hingga 6x kelipatan. Jika Anda menggunakan HTF 4H, MTF yang logis adalah 1H (rasio 4x), dan LTF yang tepat adalah 15m (rasio 4x). Jangan melompat langsung dari Daily ke 1 menit karena struktur internalnya akan terputus.
+      </p>
+    </div>
+
+    <h2>Uji Pemahaman Singkat (Interactive Quiz)</h2>
+    <p>Uji retensi pemahaman Anda sebelum melanjutkan ke sesi praktek berikutnya:</p>
+
+    <!-- Quiz Question 1 -->
+    <div class="quiz-box" id="quiz-1">
+      <div class="quiz-question">1. Pada gaya Intraday trading, timeframe mana yang berfungsi sebagai pemicu entri presisi (LTF)?</div>
+      <div class="quiz-options">
+        <button class="quiz-btn" onclick="checkAnswer(1, 0, false)">Grafik Weekly atau grafik Monthly</button>
+        <button class="quiz-btn" onclick="checkAnswer(1, 1, false)">Grafik empat jam atau harian</button>
+        <button class="quiz-btn" onclick="checkAnswer(1, 2, true)">Grafik lima belas atau lima</button>
+        <button class="quiz-btn" onclick="checkAnswer(1, 3, false)">Grafik tiga puluh atau satu</button>
+      </div>
+      <div class="quiz-feedback" id="feedback-1"></div>
+    </div>
+
+    <!-- Quiz Question 2 -->
+    <div class="quiz-box" id="quiz-2">
+      <div class="quiz-question">2. Apa fungsi esensial dari Higher Timeframe (HTF) dalam kerangka analisis tiga tingkat?</div>
+      <div class="quiz-options">
+        <button class="quiz-btn" onclick="checkAnswer(2, 0, true)">Membaca bias makro dan likuiditas</button>
+        <button class="quiz-btn" onclick="checkAnswer(2, 1, false)">Menentukan titik keluar stop loss</button>
+        <button class="quiz-btn" onclick="checkAnswer(2, 2, false)">Mencari candle konfirmasi pelatuk entri</button>
+        <button class="quiz-btn" onclick="checkAnswer(2, 3, false)">Menghitung rasio spread komisi broker</button>
+      </div>
+      <div class="quiz-feedback" id="feedback-2"></div>
+    </div>
+
+    <h2>Rekomendasi Sumber Primer</h2>
+    <p>
+      Untuk memperdalam materi sekuens multi-timeframe ini, tonton modul gratis berikut:
+      <br>
+      &bull; <strong><a href="https://www.youtube.com/c/InnerCircleTrader" target="_blank" rel="noopener">ICT 2022 Mentorship: Episode 2 &ndash; Elements of a Trade Setup</a></strong> oleh Michael J. Huddleston. Modul ini secara detail mengulas bagaimana narasi timeframe harian ditransmisikan ke grafik 15m dan 5m.
+    </p>
+
+    <div class="callout" style="border-left-color: #2b7bb9;">
+      <div class="callout-title" style="color: #2b7bb9;">Ada Pertanyaan Lanjutan?</div>
+      <p style="margin: 0;">
+        Saya adalah mentor trading Anda di workspace ini. Tanyakan langsung di chat jika ada kombinasi timeframe yang belum jelas atau jika Anda ingin menguji setup pada grafik aset tertentu!
+      </p>
+    </div>
+
+    <div class="footer-nav">
+      <a href="../reference/timeframe-matrix.html">&rarr; Buka Lembar Referensi Lengkap (Matrix Timeframe)</a>
+      <span>Modul 0001 • SMC Prompt Workspace</span>
+    </div>
+  </div>
+
+  <script>
+    function checkAnswer(questionNum, optionIdx, isCorrect) {
+      const box = document.getElementById('quiz-' + questionNum);
+      const buttons = box.querySelectorAll('.quiz-btn');
+      const feedback = document.getElementById('feedback-' + questionNum);
+
+      buttons.forEach((btn, idx) => {
+        btn.disabled = true;
+        if (idx === optionIdx) {
+          btn.classList.add(isCorrect ? 'correct' : 'incorrect');
+        }
+      });
+
+      feedback.style.display = 'block';
+      if (isCorrect) {
+        feedback.style.color = 'var(--success-color)';
+        feedback.textContent = 'Jawaban Tepat! Anda memahami penempatan tingkatan timeframe dengan benar.';
+      } else {
+        feedback.style.color = 'var(--error-color)';
+        feedback.textContent = 'Kurang Tepat. Ingat kembali peran HTF sebagai pembaca arah, dan LTF sebagai pelatuk eksekusi presisi.';
+      }
+    }
+  </script>
+</body>
+</html>

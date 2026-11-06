@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lembar Referensi: Matriks Timeframe Trading (HTF - MTF - LTF)</title>
+  <link rel="stylesheet" href="../assets/style.css">
+  <style>
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      font-family: var(--font-sans);
+    }
+    .badge-swing { background: #e3f2fd; color: #0d47a1; }
+    .badge-intraday { background: #e8f5e9; color: #1b5e20; }
+    .badge-scalp { background: #fff3e0; color: #e65100; }
+    @media print {
+      body { padding: 0.5cm; font-size: 11pt; }
+      .no-print { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="lesson-meta">Referensi Singkat • Multi-Timeframe Analysis (MTFA)</div>
+      <h1>Matriks Timeframe Trading</h1>
+      <p>Panduan kompresi pemilihan timeframe untuk gaya <strong>Swing</strong>, <strong>Intraday</strong>, dan <strong>Scalping</strong> berdasarkan hierarki 3-Tier institutional.</p>
+    </header>
+
+    <h2>1. Arsitektur Tiga Tingkat (The 3-Tier Hierarchy)</h2>
+    <p>Dalam analisis multi-timeframe terstruktur, setiap level timeframe memikul satu tanggung jawab spesifik tanpa tumpang tindih:</p>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 25%;">Tingkatan</th>
+          <th style="width: 35%;">Peran Utama</th>
+          <th style="width: 40%;">Objektif yang Dicari</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>HTF</strong><br><small>Higher Timeframe</small></td>
+          <td><em>Macro Narrative & Bias</em></td>
+          <td>Arah tren besar, batasan Dealing Range makro, Draw on Liquidity (DOL), dan zona Premium vs Discount.</td>
+        </tr>
+        <tr>
+          <td><strong>MTF</strong><br><small>Medium Timeframe</small></td>
+          <td><em>Structure & POI Setup</em></td>
+          <td>Identifikasi Point of Interest (Order Block, FVG, Liquidity Pool), dan konfirmasi BOS/CHoCH terstruktur.</td>
+        </tr>
+        <tr>
+          <td><strong>LTF</strong><br><small>Lower Timeframe</small></td>
+          <td><em>Execution & Refinement</em></td>
+          <td>Pemicu entri presisi (Market Structure Shift, displacement candle, FVG baru) guna meminimalisir jarak Stop Loss.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>2. Matriks Perbandingan Gaya Trading</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Gaya Trading</th>
+          <th>Hold Time</th>
+          <th>HTF (Bias)</th>
+          <th>MTF (POI)</th>
+          <th>LTF (Entry)</th>
+          <th>Fokus Likuiditas</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="badge badge-swing">Swing</span></td>
+          <td>Beberapa hari s.d. minggu</td>
+          <td><strong>Weekly (1W) / Daily (1D)</strong></td>
+          <td><strong>Daily (1D) / 4H</strong></td>
+          <td><strong>4H / 1H</strong></td>
+          <td>PWH/PWL (Previous Week High/Low), Monthly FVG, Major Macro Swings.</td>
+        </tr>
+        <tr>
+          <td><span class="badge badge-intraday">Intraday</span></td>
+          <td>Beberapa jam (keluar sebelum pergantian hari)</td>
+          <td><strong>4H / Daily (1D)</strong></td>
+          <td><strong>1H</strong></td>
+          <td><strong>15m (atau 5m)</strong></td>
+          <td>PDH/PDL (Previous Day High/Low), Asian Session High/Low, London/NY Killzones.</td>
+        </tr>
+        <tr>
+          <td><span class="badge badge-scalp">Scalp</span></td>
+          <td>Hitungan menit s.d. 1-2 jam</td>
+          <td><strong>1H (atau 4H)</strong></td>
+          <td><strong>15m / 5m</strong></td>
+          <td><strong>1m / 3m</strong></td>
+          <td>Session extremes, Equal Highs/Lows (EQH/EQL) lokal, sapuan likuiditas cepat.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="callout">
+      <div class="callout-title">Aturan Emas: Rasio Fraktal 4x hingga 6x</div>
+      <p style="margin: 0;">
+        Pemisahan antar tingkatan timeframe yang sehat berkisar antara kelipatan <strong>4 hingga 6 kali lipat</strong>. Contoh: <code>1D (24 jam)</code> &rarr; <code>4H (6x)</code> &rarr; <code>1H (4x)</code> &rarr; <code>15m (4x)</code>. Rasio ini menjamin detail LTF cukup bersih tanpa terjebak ke dalam <em>random market noise</em>.
+      </p>
+    </div>
+
+    <h2>3. Alur Kerja Eksekusi (Top-Down Execution Flow)</h2>
+    <ol>
+      <li><strong>Cek HTF:</strong> Tentukan apakah harga sedang berada di zona <em>Premium</em> (mencari Sell) atau <em>Discount</em> (mencari Buy), dan ke mana arah tarikan likuiditas berikutnya (DOL).</li>
+      <li><strong>Tandai MTF:</strong> Temukan POI institusional (Order Block atau FVG yang belum termitigasi) di area yang selaras dengan bias HTF.</li>
+      <li><strong>Tunggu di LTF:</strong> Jangan langsung pasang limit order tanpa konfirmasi kecuali telah diperhitungkan; tunggu harga menyentuh POI MTF lalu cetak <em>Market Structure Shift (MSS)</em> di LTF dengan displacement jelas.</li>
+    </ol>
+
+    <div class="footer-nav no-print">
+      <a href="../lessons/0001-timeframe-alignment-matrix.html">&larr; Buka Pelajaran 0001: Panduan Memilih Timeframe</a>
+      <span>Dokumen Referensi • SMC Prompt CLI</span>
+    </div>
+  </div>
+</body>
+</html>
