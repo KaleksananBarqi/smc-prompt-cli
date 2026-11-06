@@ -486,6 +486,82 @@ def _fallback_dealing_range(
     )
 
 
+def render_structure_context_block(
+    analysis: TimeframeAnalysis,
+    timeframe: str,
+    current_price: Decimal,
+    config: cfg.Config,
+) -> str:
+    """Render blok konteks struktur pasar SMC v2 (Dealing Range, Swings, FVG ce, OB mt)."""
+
+    is_daily = not cfg.is_intraday_interval(timeframe)
+    interval_lbl = cfg.interval_label(timeframe)
+
+    dealing_range = (
+        analysis.reference_facts.dealing_range_summary
+        if analysis.reference_facts and analysis.reference_facts.dealing_range_summary
+        else _fallback_dealing_range(current_price, analysis, price_format=config.price_format)
+    )
+
+    swings_table = _render_swings(
+        analysis.swings if analysis.swings else (analysis.swing_high, analysis.swing_low),
+        htf=is_daily,
+        limit=config.swings_table_rows,
+        atr=analysis.atr,
+        equal_mult=config.equal_levels_atr_mult,
+        price_format=config.price_format,
+    )
+
+    eq_highs = _render_equal_levels(analysis.equal_highs, price_format=config.price_format)
+    eq_lows = _render_equal_levels(analysis.equal_lows, price_format=config.price_format)
+
+    fvg_table = _render_fvg_table(
+        analysis.fvgs,
+        htf=is_daily,
+        limit=config.fvg_table_rows,
+        total_candles=(analysis.closed_count or analysis.candle_count),
+        price_format=config.price_format,
+        current_price=current_price,
+        atr=analysis.atr,
+        max_atr_mult=config.max_poi_atr_mult,
+    )
+
+    ob_table = _render_ob_table(
+        analysis.order_blocks,
+        htf=is_daily,
+        limit=config.ob_table_rows,
+        total_candles=(analysis.closed_count or analysis.candle_count),
+        price_format=config.price_format,
+        current_price=current_price,
+        atr=analysis.atr,
+        max_atr_mult=config.max_poi_atr_mult,
+    )
+
+    lines = [
+        f"### Konteks Struktur Pasar ({interval_lbl})",
+        f"- Klasifikasi Struktur (Mekanis): {analysis.structure_class.value}",
+        dealing_range,
+        f"- Equal Highs (Liquidity Pool): {eq_highs}",
+        f"- Equal Lows (Liquidity Pool): {eq_lows}",
+        "",
+        f"#### Sequence Swing Terdeteksi ({interval_lbl}, oldest→newest)",
+        "```",
+        swings_table,
+        "```",
+        "",
+        f"#### FVG Mekanis Unfilled ({interval_lbl}, oldest→newest, kolom: stamp,tipe,lower,upper,ce,status)",
+        "```",
+        fvg_table,
+        "```",
+        "",
+        f"#### Order Block Aktif ({interval_lbl}, oldest→newest, kolom: stamp,tipe,lower,upper,mt,status)",
+        "```",
+        ob_table,
+        "```",
+    ]
+    return "\n".join(lines)
+
+
 def build_payload(
     *,
     symbol: str,

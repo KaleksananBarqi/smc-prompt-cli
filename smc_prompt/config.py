@@ -408,6 +408,34 @@ DEFAULT_RETRY_BACKOFF_FACTOR: float = 2.0
 DEFAULT_OUTPUT_DIR: str = "output"
 DEFAULT_DELISTED_ZERO_VOLUME_STREAK: int = 3
 
+#: Bobot alokasi posisi Dual-Entry (Entry 1 Aggressive 40%, Entry 2 Moderate 60%).
+DEFAULT_DUAL_ENTRY_WEIGHTS: tuple[Decimal, Decimal] = (
+    Decimal("0.4"),
+    Decimal("0.6"),
+)
+#: Ambang batas rasio jelajah (Target Travel Ratio) untuk memicu indikasi FRONT_RUNNED (%).
+DEFAULT_FRONT_RUN_TRAVEL_THRESHOLD_PCT: Decimal = Decimal("60.0")
+#: Buffer jarak di depan Proximal Edge untuk Entry 1 Aggressive (kelipatan ATR(14) LTF).
+DEFAULT_E1_BUFFER_ATR_MULT: Decimal = Decimal("0.10")
+
+#: Kumpulan status order resmi yang didukung pada mode evaluasi setup.
+VALID_ORDER_STATUSES: frozenset[str] = frozenset({"unfilled", "filled", "partial"})
+
+
+def normalize_order_status(status: str) -> str:
+    """Normalisasi input status order menjadi salah satu dari ('unfilled', 'filled', 'partial')."""
+
+    clean = status.lower().strip()
+    if clean in ("unfilled", "pending"):
+        return "unfilled"
+    if clean in ("filled", "triggered"):
+        return "filled"
+    if clean in ("partial", "partially_filled", "partial_fill"):
+        return "partial"
+    raise ConfigError(
+        f"Invalid order status '{status}'; must be 'unfilled', 'partial', or 'filled'."
+    )
+
 #: Relative-volume lookback (candles) for the volume-spike fact (Phase 5, #16).
 #: ``relative_volume = last / mean(last N volumes)``.
 DEFAULT_VOLUME_MEAN_PERIOD: int = 20

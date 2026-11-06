@@ -48,7 +48,8 @@ from .structure_analyzer import (
     compute_atr,
     reference_sanity_warnings,
 )
-from .template_renderer import build_payload, render
+from .template_renderer import build_payload, render, render_structure_context_block
+from .trade_plan import ExcursionResult, TradePlan, build_trade_plan, compute_excursion
 
 PROG = "smc-prompt"
 
@@ -306,6 +307,11 @@ def _print_resolved_settings(
     validate_interval: str = cfg.DEFAULT_VALIDATE_INTERVAL,
     validate_candles: int = cfg.DEFAULT_VALIDATE_CANDLES,
     no_fallback: bool = False,
+    entry1: float | None = None,
+    entry2: float | None = None,
+    tp1: float | None = None,
+    tp2: float | None = None,
+    no_structure: bool = False,
 ) -> None:
     """Print the resolved run settings for ``--dry-run`` (Phase 5, #16).
 
@@ -471,79 +477,55 @@ def run(
     validate_interval: str = cfg.DEFAULT_VALIDATE_INTERVAL,
     validate_candles: int = cfg.DEFAULT_VALIDATE_CANDLES,
     no_fallback: bool = False,
+    entry1: float | None = None,
+    entry2: float | None = None,
+    tp1: float | None = None,
+    tp2: float | None = None,
+    partial: bool = False,
+    no_structure: bool = False,
 ) -> RunResult:
     """Chain fetch -> analyze -> render -> output. Raises on any failure."""
 
     if candles_only and validate_setup:
         raise ConfigError("Cannot specify both --candles-only and --validate-setup.")
 
+    resolved_entry1 = entry1 if entry1 is not None else entry
+    resolved_tp1 = tp1 if tp1 is not None else tp
     inferred_direction: str | None = None
-    if candles_only:
-        cfg.validate_interval(review_interval, flag="--review-interval")
-        cfg.provider_interval(provider, review_interval)
-        cfg.validate_review_candles(review_candles)
-        if review_interval not in (htf_interval, mtf_interval, ltf_interval):
-            ltf_interval = review_interval
-            if ltf_interval == mtf_interval:
-                mtf_interval = "4h" if ltf_interval != "4h" else "2h"
-            if ltf_interval == htf_interval:
-                htf_interval = "1d" if ltf_interval != "1d" else "1w"
-
-        if direction is not None:
-            dir_clean = direction.lower().strip()
-            if dir_clean not in ("long", "short"):
-                raise ConfigError(f"Invalid direction '{direction}'; must be 'long' or 'short'.")
-            inferred_direction = dir_clean
-        elif entry is not None and tp is not None:
-            inferred_direction = "long" if Decimal(str(tp)) > Decimal(str(entry)) else "short"
     resolved_order_status: str | None = None
+
     if validate_setup:
         if unfilled and filled:
             raise ConfigError("Cannot specify both --unfilled and --filled.")
+        if partial and (unfilled or filled):
+            raise ConfigError("Cannot specify both --partial and other status flags.")
 
         if unfilled:
             resolved_order_status = "unfilled"
         elif filled:
             resolved_order_status = "filled"
+        elif partial:
+            resolved_order_status = "partial"
         elif order_status is not None:
-            clean_status = order_status.lower().strip()
-            if clean_status in ("unfilled", "pending"):
-                resolved_order_status = "unfilled"
-            elif clean_status in ("filled", "triggered"):
-                resolved_order_status = "filled"
-            else:
-                raise ConfigError(
-                    f"Invalid order status '{order_status}'; must be 'unfilled' or 'filled'."
-                )
+            resolved_order_status = cfg.normalize_order_status(order_status)
         else:
             raise ConfigError(
-                "--validate-setup requires specifying order status: use --status [unfilled|filled] "
-                "(or flag --unfilled / --filled)."
+                "--validate-setup requires specifying order status: use --status [unfilled|partial|filled] "
+                "(or flag --unfilled / --partial / --filled)."
             )
 
-        if entry is None or tp is None:
+        if resolved_entry1 is None or resolved_tp1 is None:
             raise ConfigError("--validate-setup requires both --entry and --tp.")
 
-        dec_entry = Decimal(str(entry))
-        dec_tp = Decimal(str(tp))
-
-        if dec_tp == dec_entry:
-            raise ConfigError("--tp cannot be equal to --entry.")
-
-        if direction is not None:
-            dir_clean = direction.lower().strip()
-            if dir_clean not in ("long", "short"):
-                raise ConfigError(f"Invalid direction '{direction}'; must be 'long' or 'short'.")
-            inferred_direction = dir_clean
-        else:
-            inferred_direction = "long" if dec_tp > dec_entry else "short"
-
-        if sl is not None:
-            dec_sl = Decimal(str(sl))
-            if inferred_direction == "long" and dec_sl >= dec_entry:
-                raise ConfigError("For long setups, --sl must be lower than --entry.")
-            if inferred_direction == "short" and dec_sl <= dec_entry:
-                raise ConfigError("For short setups, --sl must be higher than --entry.")
+        plan = build_trade_plan(
+            direction=direction,
+            entry1=resolved_entry1,
+            entry2=entry2,
+            sl=sl,
+            tp1=resolved_tp1,
+            tp2=tp2,
+        )
+        inferred_direction = plan.direction
 
         cfg.validate_interval(validate_interval, flag="--validate-interval")
         cfg.provider_interval(provider, validate_interval)
@@ -554,6 +536,35 @@ def run(
                 mtf_interval = "4h" if ltf_interval != "4h" else "2h"
             if ltf_interval == htf_interval:
                 htf_interval = "1d" if ltf_interval != "1d" else "1w"
+
+    elif candles_only:
+        cfg.validate_interval(review_interval, flag="--review-interval")
+        cfg.provider_interval(provider, review_interval)
+        cfg.validate_review_candles(review_candles)
+        if review_interval not in (htf_interval, mtf_interval, ltf_interval):
+            ltf_interval = review_interval
+            if ltf_interval == mtf_interval:
+                mtf_interval = "4h" if ltf_interval != "4h" else "2h"
+            if ltf_interval == htf_interval:
+                htf_interval = "1d" if ltf_interval != "1d" else "1w"
+
+        if resolved_entry1 is not None and resolved_tp1 is not None:
+            plan = build_trade_plan(
+                direction=direction,
+                entry1=resolved_entry1,
+                entry2=entry2,
+                sl=sl,
+                tp1=resolved_tp1,
+                tp2=tp2,
+            )
+            inferred_direction = plan.direction
+        elif direction is not None:
+            dir_clean = direction.lower().strip()
+            if dir_clean not in ("long", "short"):
+                raise ConfigError(f"Invalid direction '{direction}'; must be 'long' or 'short'.")
+            inferred_direction = dir_clean
+        elif resolved_entry1 is not None and resolved_tp1 is not None:
+            inferred_direction = "long" if Decimal(str(resolved_tp1)) > Decimal(str(resolved_entry1)) else "short"
 
     key, token, account_id = _resolve_credentials(
         twelvedata_key, oanda_token, oanda_account_id
@@ -602,8 +613,8 @@ def run(
             review_interval=review_interval,
             review_candles=review_candles,
             validate_setup=validate_setup,
-            entry=entry,
-            tp=tp,
+            entry=resolved_entry1,
+            tp=resolved_tp1,
             sl=sl,
             direction=inferred_direction,
             order_status=resolved_order_status,
@@ -613,6 +624,11 @@ def run(
             validate_interval=validate_interval,
             validate_candles=validate_candles,
             no_fallback=no_fallback,
+            entry1=resolved_entry1,
+            entry2=entry2,
+            tp1=resolved_tp1,
+            tp2=tp2,
+            no_structure=no_structure,
         )
         return RunResult("", "", False, False, (), dry_run=True)
 
@@ -717,7 +733,10 @@ def run(
 
             # 3. Penarikan candle & harga sesuai mode
             if candles_only:
-                fetch_limit = min(review_candles + 20, cfg.FETCH_LIMIT_MAX)
+                fetch_limit = min(
+                    max(review_candles + 20, 100) if not no_structure else review_candles + 20,
+                    cfg.FETCH_LIMIT_MAX,
+                )
                 raw_candles = fetcher.fetch_klines(review_interval, fetch_limit)
                 acquired_data = _AcquiredMarketData(
                     mode="candles_only",
@@ -728,7 +747,10 @@ def run(
                     raw_candles=raw_candles,
                 )
             elif validate_setup:
-                fetch_limit = min(validate_candles + 20, cfg.FETCH_LIMIT_MAX)
+                fetch_limit = min(
+                    max(validate_candles + 20, 100) if not no_structure else validate_candles + 20,
+                    cfg.FETCH_LIMIT_MAX,
+                )
                 raw_candles = fetcher.fetch_klines(validate_interval, fetch_limit)
                 acquired_data = _AcquiredMarketData(
                     mode="validate_setup",
@@ -820,15 +842,67 @@ def run(
             )
 
         generated_at = acquired_data.server_time or datetime.now(timezone.utc)
+
+        e1_dec = Decimal(str(resolved_entry1)) if resolved_entry1 is not None else None
+        e2_dec = Decimal(str(entry2)) if entry2 is not None else None
+        tp1_dec = Decimal(str(resolved_tp1)) if resolved_tp1 is not None else None
+        tp2_dec = Decimal(str(tp2)) if tp2 is not None else None
+        sl_dec = Decimal(str(sl)) if sl is not None else None
+        exit_dec = Decimal(str(exit_price)) if exit_price is not None else None
+
+        excursion_res: ExcursionResult | None = None
+        if e1_dec is not None and tp1_dec is not None:
+            try:
+                rev_plan = build_trade_plan(
+                    direction=inferred_direction or direction,
+                    entry1=e1_dec,
+                    entry2=e2_dec,
+                    sl=sl_dec,
+                    tp1=tp1_dec,
+                    tp2=tp2_dec,
+                )
+                excursion_res = compute_excursion(
+                    rev_plan,
+                    selected_candles,
+                    order_status="filled",
+                    active_entry_price=exit_dec,
+                )
+            except Exception:
+                excursion_res = None
+
         journal = TradeJournalSpec(
             direction=inferred_direction or direction,
-            entry_price=Decimal(str(entry)) if entry is not None else None,
-            sl_price=Decimal(str(sl)) if sl is not None else None,
-            tp_price=Decimal(str(tp)) if tp is not None else None,
-            exit_price=Decimal(str(exit_price)) if exit_price is not None else None,
+            entry_price=e1_dec,
+            entry2_price=e2_dec,
+            sl_price=sl_dec,
+            tp_price=tp1_dec,
+            tp2_price=tp2_dec,
+            exit_price=exit_dec,
             outcome=outcome,
             notes=notes,
+            excursion=excursion_res,
         )
+
+        review_structure_block: str | None = None
+        if not no_structure and len(closed_candles) >= 25:
+            try:
+                curr_p = closed_candles[-1].close
+                struct_res, _, _ = analyze(
+                    closed_candles,
+                    timeframe=review_interval,
+                    requested=min(len(closed_candles), 40),
+                    current_price=curr_p,
+                    config=config,
+                )
+                review_structure_block = render_structure_context_block(
+                    struct_res,
+                    timeframe=review_interval,
+                    current_price=curr_p,
+                    config=config,
+                )
+            except Exception:
+                review_structure_block = None
+
         review_text = render_review_markdown(
             symbol=config.symbol,
             interval=review_interval,
@@ -837,6 +911,7 @@ def run(
             generated_at=generated_at,
             price_format=config.price_format,
             journal=journal,
+            structure_block=review_structure_block,
         )
 
         if print_stdout:
@@ -893,20 +968,73 @@ def run(
 
         assert inferred_direction is not None
         assert resolved_order_status is not None
-        assert entry is not None
-        assert tp is not None
+        assert resolved_entry1 is not None
+        assert resolved_tp1 is not None
 
         setup_spec = SetupSpec(
             symbol=config.symbol,
             direction=inferred_direction,
-            entry_price=Decimal(str(entry)),
-            tp_price=Decimal(str(tp)),
+            entry_price=Decimal(str(resolved_entry1)),
+            entry2_price=Decimal(str(entry2)) if entry2 is not None else None,
+            tp_price=Decimal(str(resolved_tp1)),
+            tp2_price=Decimal(str(tp2)) if tp2 is not None else None,
             sl_price=Decimal(str(sl)) if sl is not None else None,
             order_status=resolved_order_status,
         )
 
         analysis = analyze_setup(setup_spec, selected_candles)
         generated_at = acquired_data.server_time or datetime.now(timezone.utc)
+
+        val_deriv_line = ""
+        val_btc_line = ""
+        if (
+            not offline_mode
+            and config.provider in cfg.CRYPTO_FAILOVER_CHAIN
+            and (
+                isinstance(
+                    fetcher, (DataFetcher, BitunixSource, MexcSource, GateSource)
+                )
+                or hasattr(fetcher, "fetch_derivatives_info")
+                or hasattr(fetcher, "fetch_btc_benchmark_info")
+            )
+        ):
+            try:
+                val_deriv_line = fetch_derivatives_context(
+                    config,
+                    active_fetcher=fetcher,
+                    offline_mode=offline_mode,
+                )
+            except (Exception, AssertionError):
+                val_deriv_line = ""
+
+            try:
+                val_btc_line = fetch_btc_benchmark_context(
+                    config,
+                    active_fetcher=fetcher,
+                    offline_mode=offline_mode,
+                )
+            except (Exception, AssertionError):
+                val_btc_line = ""
+
+        val_structure_block: str | None = None
+        if not no_structure and len(closed_candles) >= 25:
+            try:
+                curr_p = closed_candles[-1].close
+                struct_res, _, _ = analyze(
+                    closed_candles,
+                    timeframe=validate_interval,
+                    requested=min(len(closed_candles), 40),
+                    current_price=curr_p,
+                    config=config,
+                )
+                val_structure_block = render_structure_context_block(
+                    struct_res,
+                    timeframe=validate_interval,
+                    current_price=curr_p,
+                    config=config,
+                )
+            except Exception:
+                val_structure_block = None
 
         validation_text = render_validation_prompt(
             setup=setup_spec,
@@ -916,6 +1044,9 @@ def run(
             provider_label=config.provider_label,
             generated_at=generated_at,
             price_format=config.price_format,
+            structure_block=val_structure_block,
+            derivatives_context_line=val_deriv_line,
+            btc_benchmark_line=val_btc_line,
         )
 
         if print_stdout:
@@ -1375,15 +1506,33 @@ def run(
 )
 @click.option(
     "--entry",
+    "--entry1",
+    "entry",
     type=float,
     default=None,
-    help="Planned entry price level for --validate-setup or --review.",
+    help="Planned entry (Entry 1 / Aggressive) price level for --validate-setup or --review.",
+)
+@click.option(
+    "--entry2",
+    "entry2",
+    type=float,
+    default=None,
+    help="Planned Entry 2 (Moderate / 50% CE/MT) price level for --validate-setup or --review.",
 )
 @click.option(
     "--tp",
+    "--tp1",
+    "tp",
     type=float,
     default=None,
-    help="Planned take profit / DOL target price level for --validate-setup or --review.",
+    help="Planned take profit (TP1 / Nearest DOL) target price level for --validate-setup or --review.",
+)
+@click.option(
+    "--tp2",
+    "tp2",
+    type=float,
+    default=None,
+    help="Planned Take Profit 2 (TP2 / Main DOL) target price level for --validate-setup or --review.",
 )
 @click.option(
     "--sl",
@@ -1433,11 +1582,11 @@ def run(
     "--order-status",
     "--status",
     "order_status",
-    type=click.Choice(["unfilled", "filled", "pending", "triggered"], case_sensitive=False),
+    type=click.Choice(["unfilled", "filled", "partial", "pending", "triggered"], case_sensitive=False),
     default=None,
     help=(
-        "Execution status of your order at the exchange: 'unfilled' (limit order pending) "
-        "or 'filled' (position active). Required for --validate-setup."
+        "Execution status of your order at the exchange: 'unfilled' (limit order pending), "
+        "'partial' (E1 filled, E2 pending), or 'filled' (position active). Required for --validate-setup."
     ),
 )
 @click.option(
@@ -1448,11 +1597,25 @@ def run(
     help="Shortcut for --order-status unfilled (limit order pending, belum terjemput).",
 )
 @click.option(
+    "--partial",
+    "partial",
+    is_flag=True,
+    default=False,
+    help="Shortcut for --order-status partial (E1 terisi, E2 masih pending).",
+)
+@click.option(
     "--filled",
     "filled",
     is_flag=True,
     default=False,
     help="Shortcut for --order-status filled (position active, sudah terjemput).",
+)
+@click.option(
+    "--no-structure",
+    "no_structure",
+    is_flag=True,
+    default=False,
+    help="Nonaktifkan penyertaan ringkasan struktur Layer-A pada mode review dan validasi setup.",
 )
 @click.option(
     "--validate-interval",
@@ -1545,6 +1708,10 @@ def main(
     no_dotenv: bool,
     no_fallback: bool,
     debug: bool,
+    entry2: float | None = None,
+    tp2: float | None = None,
+    partial: bool = False,
+    no_structure: bool = False,
 ) -> None:
     """CLI entrypoint. Parses args, then delegates to :func:`run` or :func:`run_interactive_wizard`."""
 
@@ -1615,6 +1782,10 @@ def main(
             validate_interval=validate_interval,
             validate_candles=validate_candles,
             no_fallback=no_fallback,
+            entry2=entry2,
+            tp2=tp2,
+            partial=partial,
+            no_structure=no_structure,
         )
     except SmcPromptError as exc:
         _error(str(exc))

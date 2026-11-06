@@ -1,28 +1,55 @@
 ## Peran
 
-Bertindaklah sebagai **Senior ICT/SMC Risk & Setup Validator**. Tugas Anda adalah mengevaluasi secara kritis dan objektif apakah rencana trading (setup) yang sedang dipantau **masih segar/valid (*fresh*)**, **sudah terkena *front-run* (harga memantul sebelum POI dan target telah tercapai sebagian besar/seluruhnya)**, atau **sudah batal (*invalidated*)**.
+Bertindaklah sebagai **Senior ICT/SMC Risk & Setup Validator**. Tugas Anda adalah mengevaluasi secara kritis dan objektif apakah rencana trading (setup) yang sedang dipantau **masih segar/valid (*fresh*)**, **sudah terkena *front-run* (harga memantul sebelum POI dan target telah tercapai sebagian besar/seluruhnya)**, **terisi sebagian (*partial fill*)**, atau **sudah batal (*invalidated*)**.
 
 - **Pair/Aset:** {{PAIR}}
 - **Arah Setup:** {{DIRECTION}}
+- **Sesi Pasar (UTC):** {{SESSION_KILLZONE_UTC}}
 - **Status Order Trader:** {{ORDER_STATUS_LABEL}}
+{% if IS_DUAL_ENTRY %}
+- **Level Entry 1 (Aggressive):** {{ENTRY_PRICE}}
+- **Level Entry 2 (Moderate):** {{ENTRY2_PRICE}}
+- **Blended Entry (Acuan 1R & RRR):** {{BLENDED_ENTRY_PRICE}}
+{% else %}
 - **Level Entry yang Direncanakan:** {{ENTRY_PRICE}}
+{% endif %}
+- **Level Stop Loss (SL):** {{SL_PRICE}}{% if RISK_1R %} (1R = {{RISK_1R}} poin){% endif %}
+
+{% if HAS_TP2 %}
+- **Target TP1 (Nearest DOL):** {{TP_PRICE}}{% if RR_TP1 %} (Planned R:R 1:{{RR_TP1}}){% endif %}
+
+- **Target TP2 (Main DOL):** {{TP2_PRICE}}{% if RR_TP2 %} (Planned R:R 1:{{RR_TP2}}){% endif %}
+
+{% else %}
 - **Target Take Profit (TP / DOL):** {{TP_PRICE}}
-- **Level Stop Loss (SL):** {{SL_PRICE}}
+{% endif %}
 - **Harga Pasar Terkini:** {{CURRENT_PRICE}}
 - **Waktu Evaluasi (UTC):** {{GENERATED_AT_UTC}}
 - **Data Sumber:** {{provider}} ({{INTERVAL_LABEL}}, {{CANDLE_COUNT}} candle terakhir, closed)
+{% if DERIVATIVES_CONTEXT_LINE %}
+{{DERIVATIVES_CONTEXT_LINE}}
+{% endif %}
+{% if BTC_BENCHMARK_LINE %}
+{{BTC_BENCHMARK_LINE}}
+{% endif %}
 
 {% if IS_UNFILLED %}
 > ⚠️ **[FAKTA MUTLAK DARI TRADER & PANDUAN ANTI-HALUSINASI]:**
 > Trader menyatakan secara mutlak bahwa **LIMIT ORDER MASIH PENDING DI EXCHANGE DAN BELUM PERNAH TERISI / BELUM TERJEMPUT**.
 > **DILARANG KERAS** berhalusinasi atau berasumsi bahwa posisi ini sudah aktif, sudah rugi, atau sudah terkena Stop Loss berdasarkan histori candle lama di masa lalu sebelum order dipasang! Posisi trading saat ini **BELUM ADA DI PASAR**.
 > Tugas evaluasi Anda adalah:
-> 1. Memeriksa apakah pantulan harga terdekat (*Closest Approach*) telah melaju jauh (*front-runned*) ke target TP sehingga order harus **DIBATALKAN**.
-> 2. Memeriksa apakah target TP/DOL sudah tersapu duluan (*swept*) tanpa menjemput limit order, sehingga order harus **DIBATALKAN**.
+> 1. Memeriksa apakah pantulan harga terdekat (*Closest Approach*) telah melaju jauh (*front-runned*) ke target TP1 sehingga order harus **DIBATALKAN**.
+> 2. Memeriksa apakah target TP1/DOL sudah tersapu duluan (*swept*) tanpa menjemput limit order, sehingga order harus **DIBATALKAN**.
 > 3. Memeriksa apakah setup **MASIH FRESH** sehingga limit order aman tetap dipasang.
+{% elif IS_PARTIAL %}
+> ⚠️ **[FAKTA MUTLAK DARI TRADER - PARTIAL FILL]:**
+> Trader menyatakan bahwa **ENTRY 1 (AGGRESSIVE / 40% SIZE) SUDAH TERJEMPUT DAN AKTIF BERJALAN**, sedangkan **ENTRY 2 (MODERATE / 60% SIZE) MASIH PENDING LIMIT DI EXCHANGE**.
+> Tugas evaluasi Anda adalah:
+> 1. Evaluasi *Trade Management* posisi E1 yang sedang berjalan (apakah posisi aman menuju target, perlu Move SL to BE jika TP1 sudah tersentuh atau terjadi pelemahan struktur).
+> 2. Evaluasi nasib pending limit Entry 2: apakah aman dipertahankan, atau sebaiknya **DIBATALKAN** agar tidak menambah risiko jika TP1 sudah tersapu atau momentum berbalik arah.
 {% else %}
 > ℹ️ **[FAKTA MUTLAK DARI TRADER]:**
-> Trader menyatakan bahwa posisi **SUDAH TERJEMPUT (AKTIF BERJALAN DI PASAR)**. Fokus evaluasi Anda adalah *Trade Management* (apakah posisi aman menuju TP, perlu trailing stop, atau perlu exit bila terjadi tanda pelemahan struktur).
+> Trader menyatakan bahwa posisi **SUDAH TERJEMPUT (AKTIF BERJALAN DI PASAR)**. Fokus evaluasi Anda adalah *Trade Management* (apakah posisi aman menuju TP1/TP2, perlu trailing stop, atau perlu exit bila terjadi tanda pelemahan struktur).
 {% endif %}
 
 > Seluruh angka di bawah adalah [FAKTA] pasar terverifikasi. Anda tidak memiliki akses ke visual chart di luar deret angka OHLCV yang diberikan.
@@ -31,22 +58,37 @@ Bertindaklah sebagai **Senior ICT/SMC Risk & Setup Validator**. Tugas Anda adala
 
 ### 1. Ringkasan Fakta Kuantitatif Setup vs Pergerakan Pasar
 
-- **Pendekatan Terdekat ke Entry (*Closest Approach*):** {{CLOSEST_PRICE}} pada {{CLOSEST_TIME}}
-- **Jarak Selisih ke Entry saat Pendekatan Terdekat:** {{CLOSEST_DIST}} ({{CLOSEST_DIST_ATR}}×ATR)
+- **Pendekatan Terdekat ke Entry 1 (*Closest Approach*):** {{CLOSEST_PRICE}} pada {{CLOSEST_TIME}}
+- **Jarak Selisih ke Entry 1 saat Pendekatan Terdekat:** {{CLOSEST_DIST}} ({{CLOSEST_DIST_ATR}}×ATR)
+{% if IS_DUAL_ENTRY and IS_UNFILLED %}
+- **Status Mitigasi Entry 2 (Moderate):** {{E2_STATUS}}
+{% endif %}
 - **Titik Ekstrem Pantulan Pasca-Pendekatan:** {{POST_APPROACH_EXTREME}} pada {{POST_APPROACH_TIME}}
 - **Status Mitigasi Level Entry:** {{ENTRY_STATUS}}
-- **Status Pencapaian Target TP:** {{TP_STATUS}}
-- **Rasio Jelajah Menuju Target (*Target Travel Ratio*):** {{TRAVEL_RATIO}}%
-  > *Rasio ini mengukur seberapa jauh harga telah melaju ke arah TP SEJAK titik pendekatan terdekat terjadi hingga saat ini. Semakin mendekati 100%, semakin besar potensi setup telah ter-front-run.*
+- **Status Pencapaian Target TP1:** {{TP_STATUS}}
+{% if HAS_TP2 %}
+- **Status Pencapaian Target TP2:** {{TP2_STATUS}}
+{% endif %}
+- **Rasio Jelajah Menuju Target (*Target Travel Ratio* E1 ➔ TP1):** {{TRAVEL_RATIO}}%
+  > *Rasio ini mengukur seberapa jauh harga telah melaju ke arah TP1 SEJAK titik pendekatan terdekat terjadi hingga saat ini. Jika mencapai >= 60%, setup terindikasi terkena front-run.*
 - **Status Stop Loss:** {{SL_STATUS}}
-- **Jarak Harga Terkini ke Entry:** {{CURRENT_DIST_TO_ENTRY}} ({{CURRENT_DIST_TO_ENTRY_ATR}}×ATR)
-- **Jarak Harga Terkini ke TP:** {{CURRENT_DIST_TO_TP}} ({{CURRENT_DIST_TO_TP_ATR}}×ATR)
+- **Jarak Harga Terkini ke Entry 1:** {{CURRENT_DIST_TO_ENTRY}} ({{CURRENT_DIST_TO_ENTRY_ATR}}×ATR)
+- **Jarak Harga Terkini ke TP1:** {{CURRENT_DIST_TO_TP}} ({{CURRENT_DIST_TO_TP_ATR}}×ATR)
+{% if EXCURSION_SUMMARY %}
+- **Ekskursi Harga Mekanis:** {{EXCURSION_SUMMARY}}
+{% endif %}
 - **Indikasi Mekanis Sistem:** `{{STATUS_HINT}}`
+
+{% if STRUCTURE_BLOCK %}
+---
+
+{{STRUCTURE_BLOCK}}
+{% endif %}
 
 ---
 
 ### 2. Data Candle Mentah Sequence Perjalanan Harga ({{INTERVAL_LABEL}}, UTC)
-Format kolom: `datetime(UTC),open,high,low,close,volume`
+Format kolom: `{{CSV_LEGEND}}`
 ```csv
 {{CANDLE_TABLE_CSV}}
 ```
@@ -58,24 +100,29 @@ Format kolom: `datetime(UTC),open,high,low,close,volume`
 Beri label pada setiap poin analisis: **[FAKTA]** (dari angka di atas), **[INFERENSI]** (pola struktural SMC/ICT), atau **[SPEKULASI]** (asumsi skenario).
 
 ### A. Analisis Front-Run & Mitigasi POI
-1. **Apakah harga memantul sebelum menjemput level Entry?** Periksa selisih harga pada *Closest Approach* ({{CLOSEST_PRICE}} vs {{ENTRY_PRICE}}). Apakah selisih tersebut berada dalam batas toleransi *spread* wajar atau murni berbalik sebelum zona POI?
-2. **Evaluasi Target Travel:** Dengan pergerakan yang sudah menempuh {{TRAVEL_RATIO}}% ke arah TP, apakah "daging" pergerakan (*displacement move*) sudah selesai?
-3. **Risiko Retracement Ulang:** Jika harga saat ini kembali turun/naik mendekati level entry, apakah itu merupakan retest sehat atau justru tanda pelemahan struktur (*exhaustion / liquidity dump*)?
+1. **Apakah harga memantul sebelum menjemput level Entry?** Periksa selisih harga pada *Closest Approach* ({{CLOSEST_PRICE}} vs {{ENTRY_PRICE}}). Apakah selisih tersebut berada dalam batas toleransi *spread* wajar / buffer ATR atau murni berbalik sebelum zona POI?
+{% if IS_DUAL_ENTRY %}
+2. **Evaluasi Skema Dual-Entry:** Jika Entry 1 terjemput atau ter-front-run, bagaimana probabilitas harga menjemput Entry 2 di area Consequent Encroachment (ce) / Mean Threshold (mt)?
+{% endif %}
+3. **Evaluasi Target Travel:** Dengan pergerakan yang sudah menempuh {{TRAVEL_RATIO}}% ke arah TP1, apakah pergerakan impulsif (*displacement move*) sudah selesai?
+4. **Risiko Retracement Ulang:** Jika harga saat ini kembali mendekati level entry, apakah itu merupakan retest sehat atau justru tanda pelemahan struktur (*exhaustion / liquidity dump*)?
 
-### B. Evaluasi Draw on Liquidity (DOL)
-1. Apakah target TP ({{TP_PRICE}}) atau *liquidity pool* utama sudah tersapu (*swept*) sebelum entry kita disentuh?
-2. Jika DOL sudah tersapu, apakah masih ada alasan institusional yang sah untuk mempertahankan pending order di level {{ENTRY_PRICE}}?
+### B. Evaluasi Draw on Liquidity (DOL) & Dealing Range
+1. Apakah target TP1 ({{TP_PRICE}}) atau *liquidity pool* utama sudah tersapu (*swept*) sebelum entry kita disentuh?
+2. Evaluasi posisi harga di dalam Dealing Range (apakah masih berada di area Discount untuk Long / Premium untuk Short terhadap Equilibrium 50%)?
+3. Jika DOL sudah tersapu, apakah masih ada alasan institusional yang sah untuk mempertahankan pending order di level {{ENTRY_PRICE}}?
 
 ### C. Keputusan & Rekomendasi Akhir
 
-Pilih salah satu dari 4 status baku di bawah:
+Pilih salah satu dari status baku di bawah:
 
 | Status Akhir | Kriteria SMC/ICT |
 |---|---|
-| **`[STATUS: FRESH & VALID]`** | Harga belum menjemput entry, belum menempuh >50% perjalanan ke TP, DOL belum tersapu. Limit order aman dipertahankan. |
-| **`[STATUS: FRONT-RUNNED]`** | Harga berbalik sebelum entry (ada gap sisa) dan telah menempuh sebagian besar jarak ke TP (>50-70%). Batalkan pending order; jangan kejar harga! |
-| **`[STATUS: DOL REACHED / INVALIDATED]`** | Target TP atau liquidity pool utama sudah tersapu duluan sebelum entry tersentuh, atau SL tertembus. Setup batal. |
-| **`[STATUS: TRIGGERED / IN PLAY]`** | Level entry sudah ter-tap/terjemput dan posisi sedang aktif berjalan. |
+| **`[STATUS: FRESH & VALID]`** | Harga belum menjemput entry, belum menempuh >=60% perjalanan ke TP1, DOL belum tersapu. Limit order aman dipertahankan. |
+| **`[STATUS: FRONT-RUNNED]`** | Harga berbalik sebelum entry (ada gap sisa) dan telah menempuh >=60% jarak ke TP1. Batalkan pending order; jangan kejar harga! |
+| **`[STATUS: DOL REACHED / INVALIDATED]`** | Target TP1/DOL utama sudah tersapu duluan sebelum entry tersentuh, atau SL tertembus. Setup batal. |
+| **`[STATUS: PARTIAL FILL / IN PLAY]`** | Entry 1 terisi (40%), Entry 2 masih pending. Pantau posisi E1 menuju TP1/TP2 dan putuskan status pending order E2. |
+| **`[STATUS: TRIGGERED / IN PLAY]`** | Level entry sudah terjemput dan posisi sedang aktif berjalan menuju TP1/TP2. |
 
 Isi kesimpulan terstruktur berikut:
 
@@ -86,3 +133,6 @@ Isi kesimpulan terstruktur berikut:
   - [ ] **Pertahankan Limit Order**
   - [ ] **Batalkan Limit Order (Cancel Order)**
   - [ ] **Tunggu Konfirmasi Re-entry Baru (CHoCH / MSS)**
+{% if IS_PARTIAL %}
+  - [ ] **Amankan Posisi E1 (Move SL to BE) & Batalkan Pending E2**
+{% endif %}

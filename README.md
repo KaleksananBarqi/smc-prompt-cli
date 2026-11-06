@@ -645,9 +645,9 @@ Tanpa `--max-prompt-bytes`, hanya ambang lunak `PROMPT_BYTES_WARN`
 (default `120000` byte) yang memunculkan `[smc-prompt] WARN:` berisi jumlah byte
 dan perkiraan token; exit code tetap `0`.
 
-#### 13d. Mode Post-Trade Review — ekspor data candle & jurnal tanpa prompt
+#### 13d. Mode Post-Trade Review — ekspor data candle, jurnal & ekskursi harga
 
-Digunakan setelah posisi di-entry untuk mengevaluasi jalannya trade (*post-review* / jurnal). Mode ini **hanya mengekspor data candle mentah (OHLCV)** dan **ringkasan pergerakan harga sesi** ke berkas `.md`, tanpa memuat teks instruksi analisis SMC pre-trade.
+Digunakan setelah posisi di-entry untuk mengevaluasi jalannya trade (*post-review* / jurnal). Mode ini mengekspor **data candle mentah (OHLCV)**, **ringkasan pergerakan harga sesi**, **fakta ekskursi mekanis (MFE / MAE)**, dan secara otomatis menyertakan **konteks struktur pasar Layer-A** (Dealing Range, Swings, FVG `ce`, OB `mt`), tanpa memuat teks instruksi analisis SMC pre-trade.
 
 ```bash
 # Default: 30 candle terakhir pada interval 1h
@@ -656,51 +656,62 @@ smc-prompt BTCUSDT --candles-only
 # Kustomisasi interval dan jumlah candle
 smc-prompt BTCUSDT --candles-only --review-interval 15m --review-candles 50
 
-# Alias --review juga didukung
-smc-prompt ETHUSDT --review --review-interval 4h --review-candles 20
+# Input jurnal dengan skema Dual-Entry dan multi-TP
+smc-prompt BTCUSDT --review --entry1 83700 --entry2 82500 --sl 81500 --tp1 88000 --tp2 92000 --exit 88000 --outcome "Hit TP"
+
+# Matikan penyertaan blok konteks struktur jika ingin data minimalis
+smc-prompt BTCUSDT --review --no-structure
 ```
 
 Berkas ditulis ke `<output_dir>/<SYMBOL>-REVIEW-<TIMESTAMP>.md` dan disalin ke clipboard. Berkas berisi:
-- Metadata & rentang waktu candle.
-- Ringkasan statistik harga (Open pertama, Close terakhir, Net change %, Highest high, Lowest low, Total range).
-- Formulir checklist jurnal trading (Arah Posisi, Entry, SL, TP, Outcome, Evaluasi).
-- Tabel CSV candle mentah siap pakai.
+- Metadata & rentang waktu candle beserta Sesi Killzone UTC saat fill/generate.
+- Ringkasan statistik sesi harga (Open pertama, Close terakhir, Net change %, Highest, Lowest, Range).
+- Formulir checklist jurnal trading (Mendukung Dual-Entry E1/E2/Blended, SL, TP1, TP2, Realized PnL, dan Realized R-Multiple).
+- **Fakta Ekskursi Mekanis (MFE / MAE):** Puncak keuntungan (*Maximum Favorable Excursion* dalam nominal dan kelipatan $+X\text{R}$), penarikan terdalam (*Maximum Adverse Excursion* dalam nominal dan kelipatan $-X\text{R}$), dan urutan kronologis sentuhan pertama (*First-Touch*: misal `TP1 ➔ SL`).
+- **Konteks Struktur Pasar SMC v2:** Dealing Range, EQ 50% (Premium vs Discount), Sequence Swings dengan status penembusan, FVG mekanis dengan Consequent Encroachment (`ce`), dan Order Block aktif dengan Mean Threshold (`mt`).
+- **Panduan Evaluasi Terstruktur untuk AI:** Memandu LLM menilai efektivitas dual-entry, buffer ATR front-run, kualitas entry thd EQ Dealing Range, ekskursi floating profit, dan disiplin manajemen risiko dengan label integritas `[FAKTA]`/`[INFERENSI]`/`[SPEKULASI]`.
+- Tabel CSV candle mentah siap pakai (format `tanggal` untuk $\ge 1\text{d}$, `datetime` untuk intraday $< 1\text{d}$).
 
 #### 13e. Mode Validasi Setup & Deteksi Front-Run (--validate-setup)
 
-Digunakan saat Anda telah memiliki rencana setup (misal limit order di Order Block atau FVG), tetapi ingin mengecek apakah harga sudah sempat mendekati entry lalu berbalik dan melaju ke arah target (*front-runned*), atau bahkan target TP/DOL sudah tercapai duluan sebelum entry terisi (*invalidated*).
+Digunakan saat Anda telah memiliki rencana setup (misal limit order di Order Block atau FVG), tetapi ingin mengecek secara objektif apakah harga sudah sempat mendekati entry lalu berbalik dan melaju ke arah target (*front-runned*), apakah target TP1/DOL sudah tersapu duluan sebelum entry terisi (*invalidated*), atau bagaimana memanajemen posisi yang baru terisi sebagian (*partial fill*).
 
-> ⚠️ **Kewajiban Parameter Status Order (`--unfilled` / `--filled`):**
-> Anda **wajib** memberitahu sistem apakah order Anda saat ini **belum terjemput** (`--unfilled`) atau **sudah terjemput** (`--filled`). 
-> Hal ini sangat krusial untuk **mencegah LLM berhalusinasi** menganggap posisi Anda sudah berjalan atau terkena Stop Loss berdasarkan histori pergerakan candle masa lalu sebelum order dipasang.
-> - Bila `--unfilled`: sistem hanya menganalisis pantulan harga terdekat (*Closest Approach*) yang relevan, menegaskan `entry_status: BELUM TERJEMPUT`, serta menyuntikkan instruksi tegas ke LLM agar tidak menganggap trade sudah aktif/kena SL.
-> - Bila `--filled`: sistem menyusun evaluasi *Trade Management* untuk memantau posisi aktif Anda menuju TP.
+> ⚠️ **Kewajiban Parameter Status Order (`--unfilled` / `--partial` / `--filled`):**
+> Anda **wajib** memberitahu sistem status eksekusi order Anda di exchange saat ini:
+> - **`--unfilled` (Belum Terjemput):** Limit order masih pending di exchange dan belum pernah terisi. Sistem menyuntikkan instruksi tegas anti-halusinasi agar LLM tidak menganggap trade sudah berjalan atau terkena SL berdasarkan candle lama di masa lalu.
+> - **`--partial` (Terisi Sebagian):** Khusus skema Dual-Entry di mana Entry 1 (Aggressive / 40% size) sudah terjemput dan aktif, sedangkan Entry 2 (Moderate / 60% size) masih berstatus pending limit order. LLM dipandu mengevaluasi pengamanan posisi E1 (Move SL to BE) sekaligus menentukan nasib pembatalan pending order E2.
+> - **`--filled` (Sudah Terjemput):** Posisi sudah terisi penuh di pasar. Fokus evaluasi pada *Trade Management* menuju TP1/TP2.
 
 ```bash
-# 1. Validasi Long Setup yang BELUM TERJEMPUT (Limit Order masih pending)
+# 1. Validasi Long Setup Single-Entry yang BELUM TERJEMPUT
 smc-prompt BTCUSDT --validate-setup --unfilled --entry 83700 --tp 88000 --sl 81700
 
-# 2. Validasi Short Setup yang BELUM TERJEMPUT dengan kustomisasi interval & candle
-smc-prompt ETHUSDT --validate-setup --unfilled --entry 2500 --tp 2300 --sl 2580 --validate-interval 15m --validate-candles 60
+# 2. Validasi Long Setup DUAL-ENTRY yang BELUM TERJEMPUT (E1 Aggressive + E2 Moderate + TP1 & TP2)
+smc-prompt BTCUSDT --validate-setup --unfilled --entry1 83700 --entry2 82500 --tp1 88000 --tp2 92000 --sl 81500
 
-# 3. Validasi Setup yang SUDAH TERJEMPUT (Posisi sedang aktif berjalan di pasar)
-smc-prompt BTCUSDT --validate-setup --filled --entry 83700 --tp 88000 --sl 81700
+# 3. Validasi Setup PARTIAL FILL (Entry 1 aktif berjalan, Entry 2 pending)
+smc-prompt BTCUSDT --validate-setup --partial --entry1 83700 --entry2 82500 --tp1 88000 --tp2 92000 --sl 81500
 
-# 4. Menggunakan opsi eksplisit --order-status atau --status
-smc-prompt SOLUSDT --check-setup --status unfilled --entry 140 --tp 155
+# 4. Validasi Short Setup yang SUDAH TERJEMPUT dengan kustomisasi interval
+smc-prompt ETHUSDT --validate-setup --filled --entry 2500 --tp 2300 --sl 2580 --validate-interval 15m --validate-candles 60
+
+# 5. Menggunakan opsi eksplisit --status
+smc-prompt SOLUSDT --validate-setup --status partial --entry1 140 --entry2 136 --tp 155
 ```
 
 Berkas ditulis ke `<output_dir>/<SYMBOL>-VALIDATION-<TIMESTAMP>.md` dan disalin ke clipboard. Prompt ini memuat:
-- **Fakta Kuantitatif:** Status order trader (`BELUM TERJEMPUT` vs `SUDAH TERJEMPUT`), titik pendekatan terdekat (*closest approach*), selisih jarak ke entry (dalam harga dan normalisasi ATR), status mitigasi entry, status DOL, serta **Rasio Jelajah Target (*Target Travel Ratio*)**.
+- **Fakta Kuantitatif Setup:** Level Entry 1, Entry 2, Blended Entry (acuan 1R & RRR), Stop Loss, Target TP1 (Nearest DOL), Target TP2 (Main DOL), rasio RRR terencana, status order trader, titik pendekatan terdekat (*closest approach*), selisih jarak ke Entry 1 dan Entry 2 (dalam harga dan kelipatan ATR), status mitigasi entry, status DOL, serta **Rasio Jelajah Target (*Target Travel Ratio* dihitung dari E1 ➔ TP1)**.
+- **Konteks Derivatif & Benchmark BTC:** Funding Rate, Open Interest, dan benchmarking struktural `BTCUSDT` otomatis disertakan untuk pairs kripto live.
+- **Konteks Struktur Pasar Layer-A:** Dealing Range & EQ 50% (Premium vs Discount), Sequence Swings mekanis, FVG dengan Consequent Encroachment (`ce`), dan Order Block aktif (`mt`).
 - **Indikasi Status Mekanis:**
-  - `FRESH`: Limit order belum terjemput dan belum menempuh >=60% ke target TP. Setup masih segar & valid.
-  - `FRONT_RUNNED`: Harga berbalik arah sebelum menyentuh entry dan telah menempuh >=60% menuju target TP. Risiko *chasing* tinggi / order rawan dibatalkan.
-  - `DOL_REACHED`: Target TP/DOL telah tersapu sebelum level entry terjemput. Setup gugur (*invalidated*).
-  - `TRIGGERED`: Level entry sudah terisi (khusus status `--filled`).
-  - `STOPPED_OUT`: Level SL sudah tertembus (khusus status `--filled`).
-- **Guardrails Anti-Halusinasi:** Blok khusus peringatan tegas bagi LLM agar tidak mengasumsikan order aktif jika statusnya `--unfilled`.
-- **Tabel OHLCV CSV Mentah:** Riwayat pergerakan candle selama sequence pendekatan harga.
-- **Panduan Evaluasi Risiko LLM:** Format instruksi terstruktur bagi model AI untuk menilai toleransi spread, pelemahan struktur retracement, dan keputusan limit order (Pertahankan / Batalkan / Tunggu Re-entry).
+  - `FRESH`: Limit order belum terjemput dan pantulan harga pasca-pendekatan baru menempuh <60% ke target TP1. Setup segar & valid.
+  - `FRONT_RUNNED`: Harga berbalik arah sebelum menyentuh Entry 1 dan telah melaju $\ge 60\%$ menuju target TP1. Risiko *chasing* tinggi / order rawan dibatalkan.
+  - `DOL_REACHED`: Target TP1/DOL telah tersapu sebelum limit order terjemput. Setup gugur (*invalidated*).
+  - `PARTIAL_IN_PLAY`: Entry 1 aktif berjalan, Entry 2 masih pending limit di exchange.
+  - `TP1_REACHED` / `TP2_REACHED`: Target take profit tercapai.
+  - `STOPPED_OUT`: Level SL tertembus.
+- **Guardrails Anti-Halusinasi:** Instruksi ketat bagi LLM berdasarkan status order (`unfilled`, `partial`, atau `filled`).
+- **Tabel OHLCV CSV Mentah:** Riwayat sekuens pergerakan candle perjalanan harga dengan header format compact temporal yang tepat.
 
 #### 14. Contoh kegagalan yang umum (beserta exit code)
 

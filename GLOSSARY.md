@@ -82,3 +82,15 @@ _Avoid_: Provider Fallback, Exchange Redundancy, Network Retry.
 Mode eksekusi di mana pengalihan penyedia data otomatis dinonaktifkan (`--no-fallback`), memaksa perintah gagal seketika jika exchange yang diminta secara eksplisit tidak dapat dihubungi.
 _Avoid_: Hard Mode, Fail-Fast Flag, No-Failover.
 
+### Partial Fill
+Kondisi eksekusi perdagangan di mana hanya sebagian alokasi order yang terisi di bursa—khususnya pada skema *Dual-Entry* di mana *Entry 1 (Aggressive / 40% size)* telah terisi dan aktif berjalan, sementara *Entry 2 (Moderate / 60% size)* masih berstatus *pending limit order*.
+
+### Maximum Favorable Excursion (MFE)
+Puncak keuntungan harga menguntungkan terbesar (*peak unrealized profit*) yang sempat dicapai oleh pergerakan pasar setelah titik masuk perdagangan terpicu, dinyatakan dalam nominal poin harga dan kelipatan risiko terencana ($+X.XX\text{R}$).
+
+### Maximum Adverse Excursion (MAE)
+Penetrasi kerugian berlawanan terdalam (*peak unrealized drawdown*) yang sempat ditahan oleh posisi perdagangan sebelum berbalik arah atau menyentuh target/stop loss, dinyatakan dalam nominal poin harga dan kelipatan risiko terencana ($-X.XX\text{R}$).
+
+### First-Touch Sequence
+Kronologi urutan pertama kali harga menyentuh level-level kritis perdagangan (*entry*, *Stop Loss*, *TP1*, *TP2*) yang dievaluasi secara sekuensial candle-demi-candle guna membuktikan apakah target tercapai sebelum stop loss tersentuh tanpa bias observasi visual.
+
