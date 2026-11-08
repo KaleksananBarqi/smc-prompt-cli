@@ -42,6 +42,7 @@ from .errors import ConfigError, NetworkError, SymbolNotFoundError
 from .models import Candle
 from .provider_base import (
     ProviderHttp,
+    SymbolMetadata,
     candle_delta,
     closed_ltf_fallback_price,
     iso_to_utc,
@@ -183,14 +184,8 @@ class TwelveDataSource:
     # Public API (fetcher parity)
     # ------------------------------------------------------------------
 
-    def validate_symbol(self) -> dict[str, Any]:
-        """Validate the pair and return a Binance-shaped synthetic entry.
-
-        The entry carries a ``PRICE_FILTER.tickSize`` so
-        ``cli._extract_tick_size`` derives the price precision through the same
-        path Binance uses (``XAU/USD`` -> ``0.01`` -> 2 dp), rather than falling
-        back to the magnitude rule.
-        """
+    def validate_symbol(self) -> SymbolMetadata:
+        """Validate the pair and return a structured :class:`SymbolMetadata`."""
 
         provider_symbol = cfg.provider_symbol(
             cfg.PROVIDER_TWELVEDATA, self._config.symbol
@@ -206,16 +201,11 @@ class TwelveDataSource:
                 f"not available on Twelve Data. Check the spelling (for metals "
                 f"use XAUUSD; it maps to XAU/USD)."
             )
-        return {
-            "symbol": provider_symbol,
-            "status": "TRADING",
-            "filters": [
-                {
-                    "filterType": "PRICE_FILTER",
-                    "tickSize": str(_SYNTHETIC_TICK),
-                }
-            ],
-        }
+        return SymbolMetadata(
+            symbol=provider_symbol,
+            status="TRADING",
+            tick_size=str(_SYNTHETIC_TICK),
+        )
 
     def fetch_klines(
         self, interval: str, limit: int, *, symbol: str | None = None

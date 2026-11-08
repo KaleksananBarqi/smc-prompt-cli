@@ -3,7 +3,7 @@
 Mengambil statistik derivatif (Funding Rate & Open Interest) serta acuan struktur
 ``BTCUSDT`` (untuk deteksi *SMT Divergence* pada altcoin) dari Binance Futures
 terlebih dahulu sebagai acuan likuiditas global terdalam, lalu beralih (*fallback*)
-secara anggun ke provider kripto aktif (`bitunix`, `mexc`, `gate`) apabila Binance
+secara anggun ke adapter provider kripto aktif (`bitunix`, `mexc`, `gate`) apabila Binance
 tidak dapat dihubungi atau tidak mencantumkan simbol tersebut.
 """
 
@@ -24,13 +24,7 @@ from .models import SwingType
 from .structure_analyzer import analyze
 
 _BTC_SYMBOLS: frozenset[str] = frozenset({"BTCUSDT", "BTCUSDC", "BTCUSD", "BTCBUSD"})
-
-BINANCE_PREMIUM_INDEX_PATH: str = "/fapi/v1/premiumIndex"
-BINANCE_OPEN_INTEREST_PATH: str = "/fapi/v1/openInterest"
-BINANCE_OPEN_INTEREST_HIST_PATH: str = "/futures/data/openInterestHist"
-BITUNIX_TICKERS_PATH: str = "/api/v1/futures/market/tickers"
-MEXC_TICKER_PATH: str = "/api/v1/contract/ticker"
-GATE_CONTRACT_PATH_TEMPLATE: str = "/api/v4/futures/usdt/contracts/{contract}"
+_STANDARD_CRYPTO_ADAPTERS = (DataFetcher, BitunixSource, MexcSource, GateSource)
 
 
 def _to_decimal(value: Decimal | float | int | str | None) -> Decimal | None:
@@ -146,218 +140,31 @@ def format_btc_benchmark_line(
     )
 
 
-def _get_json_once(
-    session: requests.Session,
-    url: str,
-    params: dict[str, Any],
+def _format_adapter_derivatives_info(
+    info: Any,
     *,
-    timeout: float,
-) -> Any:
-    """Lakukan satu kali permintaan HTTP GET dan kembalikan JSON jika status 2xx."""
+    default_label: str,
+) -> str:
+    """Format payload hasil ``fetch_derivatives_info()`` dari adapter bursa menjadi satu baris."""
 
-    response = session.get(
-        url,
-        params=params,
-        timeout=timeout,
-        headers={"User-Agent": "smc-prompt/0.1"},
+    if isinstance(info, str) and info.strip():
+        return info.strip()
+    if not isinstance(info, dict) or not info:
+        return ""
+
+    oi_delta = info.get("oi_delta_4h")
+    if not oi_delta:
+        prev_oi = info.get("prev_open_interest")
+        latest_oi = info.get("latest_open_interest")
+        if prev_oi is not None and latest_oi is not None:
+            oi_delta = format_oi_delta(prev_oi, latest_oi)
+
+    return format_derivatives_context_line(
+        source_label=str(info.get("source_label") or default_label),
+        funding_rate=info.get("funding_rate"),
+        open_interest=info.get("open_interest"),
+        oi_delta_4h=oi_delta,
     )
-    if response.status_code >= 400:
-        return None
-    return response.json()
-
-
-def _fetch_binance_derivatives(
-    config: cfg.Config,
-    session: requests.Session,
-) -> str:
-    """Ambil Funding Rate, Open Interest, dan opsional delta 4H dari Binance Futures."""
-
-    symbol = cfg.provider_symbol(cfg.PROVIDER_BINANCE, config.symbol)
-    hosts = config.base_urls or cfg.DEFAULT_BASE_URLS
-    timeout = config.request_timeout
-
-    for host in hosts:
-        base = host.rstrip("/")
-        try:
-            prem = _get_json_once(
-                session,
-                f"{base}{BINANCE_PREMIUM_INDEX_PATH}",
-                {"symbol": symbol},
-                timeout=timeout,
-            )
-            if not isinstance(prem, dict) or "lastFundingRate" not in prem:
-                continue
-
-            oi_payload = _get_json_once(
-                session,
-                f"{base}{BINANCE_OPEN_INTEREST_PATH}",
-                {"symbol": symbol},
-                timeout=timeout,
-            )
-            if not isinstance(oi_payload, dict) or "openInterest" not in oi_payload:
-                continue
-
-            funding_rate = prem.get("lastFundingRate")
-            open_interest = oi_payload.get("openInterest")
-
-            oi_delta_str = ""
-            try:
-                hist = _get_json_once(
-                    session,
-                    f"{base}{BINANCE_OPEN_INTEREST_HIST_PATH}",
-                    {"symbol": symbol, "period": "4h", "limit": 2},
-                    timeout=timeout,
-                )
-                if isinstance(hist, list) and len(hist) >= 2:
-                    prev_entry = hist[-2]
-                    latest_entry = hist[-1]
-                    if isinstance(prev_entry, dict) and isinstance(latest_entry, dict):
-                        prev_val = prev_entry.get("sumOpenInterest") or prev_entry.get("openInterest")
-                        latest_val = latest_entry.get("sumOpenInterest") or latest_entry.get("openInterest")
-                        if prev_val is not None and latest_val is not None:
-                            oi_delta_str = format_oi_delta(prev_val, latest_val)
-            except (Exception, AssertionError):
-                oi_delta_str = ""
-
-            line = format_derivatives_context_line(
-                source_label=cfg.provider_label(cfg.PROVIDER_BINANCE),
-                funding_rate=funding_rate,
-                open_interest=open_interest,
-                oi_delta_4h=oi_delta_str,
-            )
-            if line:
-                return line
-        except (Exception, AssertionError):
-            continue
-
-    return ""
-
-
-def _fetch_bitunix_derivatives(
-    config: cfg.Config,
-    session: requests.Session,
-) -> str:
-    """Ambil Funding Rate & Open Interest dari endpoint tickers Bitunix Futures."""
-
-    symbol = cfg.provider_symbol(cfg.PROVIDER_BITUNIX, config.symbol)
-    url = f"{cfg.BITUNIX_HOST.rstrip('/')}{BITUNIX_TICKERS_PATH}"
-    try:
-        payload = _get_json_once(
-            session,
-            url,
-            {"symbols": symbol},
-            timeout=config.request_timeout,
-        )
-        if not isinstance(payload, dict) or payload.get("code", 0) != 0:
-            return ""
-        data = payload.get("data")
-        if not isinstance(data, list) or not data:
-            return ""
-        matched: dict[str, Any] | None = None
-        for item in data:
-            if isinstance(item, dict) and item.get("symbol", "").upper() == symbol:
-                matched = item
-                break
-        if matched is None and isinstance(data[0], dict):
-            matched = data[0]
-        if matched is None:
-            return ""
-
-        funding_rate = (
-            matched.get("fundingRate")
-            if matched.get("fundingRate") is not None
-            else matched.get("funding_rate", matched.get("lastFundingRate"))
-        )
-        open_interest = (
-            matched.get("openInterest")
-            if matched.get("openInterest") is not None
-            else matched.get("open_interest", matched.get("holdVol"))
-        )
-        return format_derivatives_context_line(
-            source_label=cfg.provider_label(cfg.PROVIDER_BITUNIX),
-            funding_rate=funding_rate,
-            open_interest=open_interest,
-        )
-    except (Exception, AssertionError):
-        return ""
-
-
-def _fetch_mexc_derivatives(
-    config: cfg.Config,
-    session: requests.Session,
-) -> str:
-    """Ambil Funding Rate & Open Interest (holdVol) dari endpoint ticker MEXC Futures."""
-
-    symbol = cfg.provider_symbol(cfg.PROVIDER_MEXC, config.symbol)
-    url = f"{cfg.MEXC_HOST.rstrip('/')}{MEXC_TICKER_PATH}"
-    try:
-        payload = _get_json_once(
-            session,
-            url,
-            {"symbol": symbol},
-            timeout=config.request_timeout,
-        )
-        if not isinstance(payload, dict) or payload.get("code", 0) != 0:
-            return ""
-        data = payload.get("data")
-        if not isinstance(data, dict):
-            return ""
-
-        funding_rate = (
-            data.get("fundingRate")
-            if data.get("fundingRate") is not None
-            else data.get("funding_rate")
-        )
-        open_interest = (
-            data.get("holdVol")
-            if data.get("holdVol") is not None
-            else data.get("openInterest", data.get("open_interest"))
-        )
-        return format_derivatives_context_line(
-            source_label=cfg.provider_label(cfg.PROVIDER_MEXC),
-            funding_rate=funding_rate,
-            open_interest=open_interest,
-        )
-    except (Exception, AssertionError):
-        return ""
-
-
-def _fetch_gate_derivatives(
-    config: cfg.Config,
-    session: requests.Session,
-) -> str:
-    """Ambil Funding Rate & Open Interest (position_size) dari detail kontrak Gate.io Futures."""
-
-    contract = cfg.provider_symbol(cfg.PROVIDER_GATE, config.symbol)
-    path = GATE_CONTRACT_PATH_TEMPLATE.format(contract=contract)
-    url = f"{cfg.GATE_HOST.rstrip('/')}{path}"
-    try:
-        payload = _get_json_once(
-            session,
-            url,
-            {},
-            timeout=config.request_timeout,
-        )
-        if not isinstance(payload, dict) or payload.get("label") is not None:
-            return ""
-
-        funding_rate = (
-            payload.get("funding_rate")
-            if payload.get("funding_rate") is not None
-            else payload.get("fundingRate")
-        )
-        open_interest = (
-            payload.get("position_size")
-            if payload.get("position_size") is not None
-            else payload.get("total_size", payload.get("openInterest"))
-        )
-        return format_derivatives_context_line(
-            source_label=cfg.provider_label(cfg.PROVIDER_GATE),
-            funding_rate=funding_rate,
-            open_interest=open_interest,
-        )
-    except (Exception, AssertionError):
-        return ""
 
 
 def _resolve_http_session(
@@ -384,38 +191,70 @@ def fetch_derivatives_context(
     session: requests.Session | None = None,
     offline_mode: bool = False,
 ) -> str:
-    """Ambil baris konteks derivatif dengan strategi Binance-First dan fallback anggun."""
+    """Ambil baris konteks derivatif dengan strategi Binance-First melalui adapter bursa."""
 
     if offline_mode or config.provider not in cfg.CRYPTO_FAILOVER_CHAIN:
         return ""
 
     try:
-        if active_fetcher is not None and hasattr(active_fetcher, "fetch_derivatives_info"):
-            custom_info = active_fetcher.fetch_derivatives_info()
-            if isinstance(custom_info, str) and custom_info.strip():
-                return custom_info.strip()
-            if isinstance(custom_info, dict):
-                line = format_derivatives_context_line(
-                    source_label=str(custom_info.get("source_label") or config.provider_label),
-                    funding_rate=custom_info.get("funding_rate"),
-                    open_interest=custom_info.get("open_interest"),
-                    oi_delta_4h=custom_info.get("oi_delta_4h"),
-                )
-                if line:
-                    return line
+        # Jika active_fetcher adalah test double kustom yang menyediakan fetch_derivatives_info()
+        if (
+            active_fetcher is not None
+            and not isinstance(active_fetcher, _STANDARD_CRYPTO_ADAPTERS)
+            and hasattr(active_fetcher, "fetch_derivatives_info")
+        ):
+            line = _format_adapter_derivatives_info(
+                active_fetcher.fetch_derivatives_info(),
+                default_label=config.provider_label,
+            )
+            if line:
+                return line
 
         http_session = _resolve_http_session(session, active_fetcher)
 
-        binance_line = _fetch_binance_derivatives(config, http_session)
+        # 1. Coba Binance terlebih dahulu (Binance-First) via DataFetcher adapter
+        binance_fetcher = (
+            active_fetcher
+            if isinstance(active_fetcher, DataFetcher) and session is None
+            else DataFetcher(
+                replace(config, provider=cfg.PROVIDER_BINANCE),
+                session=http_session,
+                sleep=lambda _: None,
+            )
+        )
+        binance_line = _format_adapter_derivatives_info(
+            binance_fetcher.fetch_derivatives_info(),
+            default_label=cfg.provider_label(cfg.PROVIDER_BINANCE),
+        )
         if binance_line:
             return binance_line
 
+        # 2. Fallback ke adapter bursa kripto aktif apabila bukan Binance
+        fallback_adapter: Any = None
         if config.provider == cfg.PROVIDER_BITUNIX:
-            return _fetch_bitunix_derivatives(config, http_session)
-        if config.provider == cfg.PROVIDER_MEXC:
-            return _fetch_mexc_derivatives(config, http_session)
-        if config.provider == cfg.PROVIDER_GATE:
-            return _fetch_gate_derivatives(config, http_session)
+            fallback_adapter = (
+                active_fetcher
+                if isinstance(active_fetcher, BitunixSource) and session is None
+                else BitunixSource(config, session=http_session, sleep=lambda _: None)
+            )
+        elif config.provider == cfg.PROVIDER_MEXC:
+            fallback_adapter = (
+                active_fetcher
+                if isinstance(active_fetcher, MexcSource) and session is None
+                else MexcSource(config, session=http_session, sleep=lambda _: None)
+            )
+        elif config.provider == cfg.PROVIDER_GATE:
+            fallback_adapter = (
+                active_fetcher
+                if isinstance(active_fetcher, GateSource) and session is None
+                else GateSource(config, session=http_session, sleep=lambda _: None)
+            )
+
+        if fallback_adapter is not None:
+            return _format_adapter_derivatives_info(
+                fallback_adapter.fetch_derivatives_info(),
+                default_label=config.provider_label,
+            )
     except (Exception, AssertionError):
         return ""
 
@@ -598,5 +437,3 @@ def fetch_btc_benchmark_context(
         )
     except (Exception, AssertionError):
         return ""
-
-

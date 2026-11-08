@@ -44,6 +44,7 @@ from .errors import ConfigError, NetworkError, SymbolNotFoundError
 from .models import Candle
 from .provider_base import (
     ProviderHttp,
+    SymbolMetadata,
     candle_delta,
     closed_ltf_fallback_price,
     iso_to_utc,
@@ -285,14 +286,8 @@ class OandaSource:
     # Public API (fetcher parity)
     # ------------------------------------------------------------------
 
-    def validate_symbol(self) -> dict[str, Any]:
-        """Validate the instrument and return a Binance-shaped synthetic entry.
-
-        A one-candle probe confirms the instrument is tradable on the token,
-        and the venue's ``displayPrecision`` (when readable) becomes the
-        synthetic ``PRICE_FILTER.tickSize`` so price rendering uses the real
-        venue precision.
-        """
+    def validate_symbol(self) -> SymbolMetadata:
+        """Validate the instrument and return a structured :class:`SymbolMetadata`."""
 
         instrument = self.instrument
         payload = self._request(
@@ -312,13 +307,11 @@ class OandaSource:
         tick_size = self._tick_size(
             precision if precision is not None else _FALLBACK_DISPLAY_PRECISION
         )
-        return {
-            "symbol": instrument,
-            "status": "TRADING",
-            "filters": [
-                {"filterType": "PRICE_FILTER", "tickSize": tick_size}
-            ],
-        }
+        return SymbolMetadata(
+            symbol=instrument,
+            status="TRADING",
+            tick_size=tick_size,
+        )
 
     def fetch_klines(
         self, interval: str, limit: int, *, symbol: str | None = None

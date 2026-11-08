@@ -879,6 +879,105 @@ def test_cli_run_wires_btc_benchmark_for_altcoin_and_skips_for_btcusdt(
     assert "Benchmark BTCUSDT" not in btc_result.prompt
 
 
+def test_symbol_metadata_structured_and_mapping_compatibility() -> None:
+    """Memastikan SymbolMetadata memiliki atribut bertipe kuat sekaligus kompatibilitas subscript."""
+    from smc_prompt.provider_base import SymbolMetadata, extract_tick_size
+
+    meta = SymbolMetadata(symbol="BTCUSDT", status="TRADING", tick_size="0.10")
+    assert meta.symbol == "BTCUSDT"
+    assert meta.status == "TRADING"
+    assert meta.tick_size == "0.10"
+    assert extract_tick_size(meta) == "0.10"
+
+    # Kompatibilitas subscript/mapping
+    assert meta["symbol"] == "BTCUSDT"
+    assert meta.get("status") == "TRADING"
+    assert meta["filters"] == [{"filterType": "PRICE_FILTER", "tickSize": "0.10"}]
+    assert "symbol" in meta
+
+
+def test_crypto_adapters_encapsulate_fetch_derivatives_info() -> None:
+    """Memastikan keempat adapter bursa kripto mengenkapsulasi endpoint derivatif masing-masing."""
+    from smc_prompt.bitunix_source import BitunixSource
+    from smc_prompt.data_fetcher import DataFetcher
+    from smc_prompt.gate_source import GateSource
+    from smc_prompt.mexc_source import MexcSource
+
+    # 1. DataFetcher (Binance)
+    bin_cfg = cfg.build_config("BTCUSDT", provider=cfg.PROVIDER_BINANCE)
+    bin_session = _FakeSession(
+        [
+            ("/fapi/v1/premiumIndex", {"symbol": "BTCUSDT", "lastFundingRate": "0.00010000"}),
+            ("/fapi/v1/openInterest", {"symbol": "BTCUSDT", "openInterest": "452100"}),
+            (
+                "/futures/data/openInterestHist",
+                [
+                    {"symbol": "BTCUSDT", "sumOpenInterest": "400000"},
+                    {"symbol": "BTCUSDT", "sumOpenInterest": "452100"},
+                ],
+            ),
+        ]
+    )
+    bin_info = DataFetcher(bin_cfg, session=bin_session).fetch_derivatives_info()
+    assert bin_info["source_label"] == "Binance"
+    assert bin_info["funding_rate"] == "0.00010000"
+    assert bin_info["open_interest"] == "452100"
+    assert bin_info["prev_open_interest"] == "400000"
+    assert bin_info["latest_open_interest"] == "452100"
+
+    # 2. BitunixSource
+    bit_cfg = cfg.build_config("BTCUSDT", provider=cfg.PROVIDER_BITUNIX)
+    bit_session = _FakeSession(
+        [
+            (
+                "/api/v1/futures/market/tickers",
+                {
+                    "code": 0,
+                    "data": [{"symbol": "BTCUSDT", "fundingRate": "0.0002", "openInterest": "320000"}],
+                },
+            )
+        ]
+    )
+    bit_info = BitunixSource(bit_cfg, session=bit_session).fetch_derivatives_info()
+    assert bit_info["source_label"] == "Bitunix"
+    assert bit_info["funding_rate"] == "0.0002"
+    assert bit_info["open_interest"] == "320000"
+
+    # 3. MexcSource
+    mexc_cfg = cfg.build_config("BTCUSDT", provider=cfg.PROVIDER_MEXC)
+    mexc_session = _FakeSession(
+        [
+            (
+                "/api/v1/contract/ticker",
+                {
+                    "code": 0,
+                    "data": {"symbol": "BTC_USDT", "fundingRate": "-0.00005", "holdVol": "1250000"},
+                },
+            )
+        ]
+    )
+    mexc_info = MexcSource(mexc_cfg, session=mexc_session).fetch_derivatives_info()
+    assert mexc_info["source_label"] == "MEXC"
+    assert mexc_info["funding_rate"] == "-0.00005"
+    assert mexc_info["open_interest"] == "1250000"
+
+    # 4. GateSource
+    gate_cfg = cfg.build_config("BTCUSDT", provider=cfg.PROVIDER_GATE)
+    gate_session = _FakeSession(
+        [
+            (
+                "/api/v4/futures/usdt/contracts/BTC_USDT",
+                {"name": "BTC_USDT", "funding_rate": "0.0001", "position_size": 452100},
+            )
+        ]
+    )
+    gate_info = GateSource(gate_cfg, session=gate_session).fetch_derivatives_info()
+    assert gate_info["source_label"] == "Gate.io"
+    assert gate_info["funding_rate"] == "0.0001"
+    assert gate_info["open_interest"] == 452100
+
+
+
 
 
 

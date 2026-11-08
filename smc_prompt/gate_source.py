@@ -24,8 +24,10 @@ from .errors import NetworkError, SymbolNotFoundError
 from .models import Candle
 from .provider_base import (
     ProviderHttp,
+    SymbolMetadata,
     candle_delta,
     closed_ltf_fallback_price,
+    get_json_once,
     ms_to_utc,
     parse_decimal,
     price_sanity_warning,
@@ -101,7 +103,7 @@ class GateSource:
                 )
         return payload
 
-    def validate_symbol(self) -> dict[str, Any]:
+    def validate_symbol(self) -> SymbolMetadata:
         """Validasi kontrak terhadap daftar kontrak Gate.io Futures dan peroleh ukuran tick (tickSize)."""
 
         target = cfg.provider_symbol(cfg.PROVIDER_GATE, self._config.symbol)
@@ -121,16 +123,11 @@ class GateSource:
         else:
             tick_size = Decimal("0.01")
 
-        return {
-            "symbol": target,
-            "status": "TRADING",
-            "filters": [
-                {
-                    "filterType": "PRICE_FILTER",
-                    "tickSize": str(tick_size),
-                }
-            ],
-        }
+        return SymbolMetadata(
+            symbol=target,
+            status="TRADING",
+            tick_size=str(tick_size),
+        )
 
     def fetch_klines(
         self, interval: str, limit: int, *, symbol: str | None = None
@@ -232,3 +229,39 @@ class GateSource:
         except Exception:
             pass
         return self._now()
+
+    def fetch_derivatives_info(self) -> dict[str, Any]:
+        """Ambil Funding Rate & Open Interest (position_size) dari detail kontrak Gate.io Futures."""
+
+        contract = cfg.provider_symbol(cfg.PROVIDER_GATE, self._config.symbol)
+        path = CONTRACT_PATH_TEMPLATE.format(contract=contract)
+        for host in self._hosts:
+            url = f"{host.rstrip('/')}{path}"
+            try:
+                payload = get_json_once(
+                    self._http.session,
+                    url,
+                    {},
+                    timeout=self._config.request_timeout,
+                )
+                if not isinstance(payload, dict) or payload.get("label") is not None:
+                    continue
+
+                funding_rate = (
+                    payload.get("funding_rate")
+                    if payload.get("funding_rate") is not None
+                    else payload.get("fundingRate")
+                )
+                open_interest = (
+                    payload.get("position_size")
+                    if payload.get("position_size") is not None
+                    else payload.get("total_size", payload.get("openInterest"))
+                )
+                return {
+                    "source_label": cfg.provider_label(cfg.PROVIDER_GATE),
+                    "funding_rate": funding_rate,
+                    "open_interest": open_interest,
+                }
+            except (Exception, AssertionError):
+                continue
+        return {}

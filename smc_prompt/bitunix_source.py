@@ -24,8 +24,10 @@ from .errors import NetworkError, SymbolNotFoundError
 from .models import Candle
 from .provider_base import (
     ProviderHttp,
+    SymbolMetadata,
     candle_delta,
     closed_ltf_fallback_price,
+    get_json_once,
     ms_to_utc,
     parse_decimal,
     price_sanity_warning,
@@ -104,7 +106,7 @@ class BitunixSource:
                 )
         return payload
 
-    def validate_symbol(self) -> dict[str, Any]:
+    def validate_symbol(self) -> SymbolMetadata:
         """Validate the symbol against Bitunix Futures pairs and derive tick size."""
 
         context = f"{self._config.symbol} trading pairs"
@@ -137,16 +139,11 @@ class BitunixSource:
         else:
             tick_size = Decimal("0.01")
 
-        return {
-            "symbol": target,
-            "status": "TRADING",
-            "filters": [
-                {
-                    "filterType": "PRICE_FILTER",
-                    "tickSize": str(tick_size),
-                }
-            ],
-        }
+        return SymbolMetadata(
+            symbol=target,
+            status="TRADING",
+            tick_size=str(tick_size),
+        )
 
     def _candle_from_row(
         self,
@@ -306,3 +303,50 @@ class BitunixSource:
         """
 
         return self._now()
+
+    def fetch_derivatives_info(self) -> dict[str, Any]:
+        """Ambil Funding Rate & Open Interest dari endpoint tickers Bitunix Futures."""
+
+        symbol = cfg.provider_symbol(cfg.PROVIDER_BITUNIX, self._config.symbol)
+        for host in self._hosts:
+            url = f"{host.rstrip('/')}{TICKERS_PATH}"
+            try:
+                payload = get_json_once(
+                    self._http.session,
+                    url,
+                    {"symbols": symbol},
+                    timeout=self._config.request_timeout,
+                )
+                if not isinstance(payload, dict) or payload.get("code", 0) != 0:
+                    continue
+                data = payload.get("data")
+                if not isinstance(data, list) or not data:
+                    continue
+                matched: dict[str, Any] | None = None
+                for item in data:
+                    if isinstance(item, dict) and item.get("symbol", "").upper() == symbol:
+                        matched = item
+                        break
+                if matched is None and isinstance(data[0], dict):
+                    matched = data[0]
+                if matched is None:
+                    continue
+
+                funding_rate = (
+                    matched.get("fundingRate")
+                    if matched.get("fundingRate") is not None
+                    else matched.get("funding_rate", matched.get("lastFundingRate"))
+                )
+                open_interest = (
+                    matched.get("openInterest")
+                    if matched.get("openInterest") is not None
+                    else matched.get("open_interest", matched.get("holdVol"))
+                )
+                return {
+                    "source_label": cfg.provider_label(cfg.PROVIDER_BITUNIX),
+                    "funding_rate": funding_rate,
+                    "open_interest": open_interest,
+                }
+            except (Exception, AssertionError):
+                continue
+        return {}

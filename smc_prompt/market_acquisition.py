@@ -30,7 +30,12 @@ from .market_context import fetch_btc_benchmark_context, fetch_derivatives_conte
 from .mexc_source import MexcSource
 from .models import Candle
 from .oanda_source import OandaSource
-from .provider_base import price_sanity_warning
+from .provider_base import (
+    MarketDataSource,
+    SymbolMetadata,
+    extract_tick_size,
+    price_sanity_warning,
+)
 from .structure_analyzer import analyze, compute_atr
 from .template_renderer import render_structure_context_block
 from .twelvedata_source import TwelveDataSource
@@ -116,19 +121,6 @@ def resolve_mode_intervals(
     if new_ltf == new_htf:
         new_htf = "1d" if new_ltf != "1d" else "1w"
     return new_htf, new_mtf, new_ltf
-
-
-def extract_tick_size(entry: dict) -> str | None:
-    """Mengekstrak ``PRICE_FILTER.tickSize`` dari respons metadata simbol exchange."""
-
-    filters = entry.get("filters") if isinstance(entry, dict) else None
-    if not isinstance(filters, list):
-        return None
-    for item in filters:
-        if isinstance(item, dict) and item.get("filterType") == "PRICE_FILTER":
-            tick = item.get("tickSize")
-            return str(tick) if tick is not None else None
-    return None
 
 
 def make_provider_source(
@@ -388,7 +380,11 @@ def acquire_market_snapshot(
                 price_format=cfg.PriceFormat(cfg.decimals_from_tick_size(tick_size)),
             )
 
-            status = symbol_entry.get("status") if isinstance(symbol_entry, dict) else None
+            status = (
+                symbol_entry.status
+                if isinstance(symbol_entry, SymbolMetadata)
+                else (symbol_entry.get("status") if isinstance(symbol_entry, dict) else None)
+            )
             candidate_warnings: list[str] = []
             if isinstance(status, str) and status and status != "TRADING":
                 candidate_warnings.append(

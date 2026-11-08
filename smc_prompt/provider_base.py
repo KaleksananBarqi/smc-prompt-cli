@@ -24,9 +24,10 @@ from __future__ import annotations
 import random
 import re
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence
 
 import requests
 
@@ -178,6 +179,110 @@ def closed_ltf_fallback_price(
     return fallback
 
 
+@dataclass(frozen=True)
+class SymbolMetadata:
+    """Metadata simbol terstruktur hasil validasi instrumen pada sumber data.
+
+    Menyediakan atribut bertipe kuat (``symbol``, ``status``, ``tick_size``)
+    sekaligus mendukung akses subscript/mapping (``entry["symbol"]``,
+    ``entry["status"]``, ``entry["filters"]``) agar kompatibel penuh dengan
+    pemanggil dan pengujian yang mengharapkan bentuk ``exchangeInfo`` Binance.
+    """
+
+    symbol: str
+    status: str = "TRADING"
+    tick_size: str | None = None
+    raw_filters: tuple[dict[str, Any], ...] = ()
+
+    @property
+    def filters(self) -> list[dict[str, Any]]:
+        """Daftar filter kompatibel skema exchangeInfo Binance."""
+        if self.raw_filters:
+            return [dict(item) for item in self.raw_filters]
+        if self.tick_size is not None:
+            return [{"filterType": "PRICE_FILTER", "tickSize": str(self.tick_size)}]
+        return []
+
+    def to_dict(self) -> dict[str, Any]:
+        """Konversi ke representasi dictionary standar."""
+        return {
+            "symbol": self.symbol,
+            "status": self.status,
+            "filters": self.filters,
+        }
+
+    def __getitem__(self, key: str) -> Any:
+        data = self.to_dict()
+        if key in data:
+            return data[key]
+        raise KeyError(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.to_dict().get(key, default)
+
+    def __contains__(self, key: object) -> bool:
+        return key in ("symbol", "status", "filters")
+
+
+def extract_tick_size(entry: SymbolMetadata | Mapping[str, Any] | Any) -> str | None:
+    """Ambil ``tickSize`` dari :class:`SymbolMetadata` atau dictionary ``exchangeInfo``."""
+
+    if isinstance(entry, SymbolMetadata):
+        return entry.tick_size
+    filters = entry.get("filters") if isinstance(entry, Mapping) else None
+    if not isinstance(filters, list):
+        return None
+    for item in filters:
+        if isinstance(item, Mapping) and item.get("filterType") == "PRICE_FILTER":
+            tick = item.get("tickSize")
+            return str(tick) if tick is not None else None
+    return None
+
+
+class MarketDataSource(Protocol):
+    """Protokol kontrak bersama untuk seluruh adapter sumber data pasar."""
+
+    @property
+    def price_notes(self) -> tuple[str, ...]: ...
+
+    def validate_symbol(self) -> SymbolMetadata | dict[str, Any]: ...
+
+    def fetch_server_time(self) -> datetime: ...
+
+    def with_now(self, moment: datetime) -> "MarketDataSource": ...
+
+    def fetch_klines(
+        self, interval: str, limit: int, *, symbol: str | None = None
+    ) -> list[Candle]: ...
+
+    def fetch_current_price(
+        self,
+        *,
+        reference_candle: Candle | None = None,
+        tolerance: Decimal | None = None,
+    ) -> Decimal: ...
+
+
+def get_json_once(
+    session: requests.Session,
+    url: str,
+    params: dict[str, Any],
+    *,
+    timeout: float,
+) -> Any:
+    """Lakukan satu kali permintaan HTTP GET dan kembalikan JSON jika status 2xx."""
+
+    response = session.get(
+        url,
+        params=params,
+        timeout=timeout,
+        headers={"User-Agent": "smc-prompt/0.1"},
+    )
+    if response.status_code >= 400:
+        return None
+    return response.json()
+
+
 class ProviderHttp:
     """Retry/backoff + host-failover JSON GET shared by the providers.
 
@@ -243,6 +348,8 @@ class ProviderHttp:
         *,
         headers: dict[str, str] | None = None,
         context: str,
+        not_found_message: str | None = None,
+        unreachable_prefix: str | None = None,
     ) -> Any:
         """GET ``path`` across ``hosts`` with retry/backoff and failover."""
 
@@ -289,6 +396,8 @@ class ProviderHttp:
                     )
 
                 if status in FATAL_CLIENT_STATUSES:
+                    if not_found_message is not None:
+                        raise SymbolNotFoundError(not_found_message)
                     raise SymbolNotFoundError(
                         f"{context} is not available from this provider "
                         f"(HTTP {status} from {base}). Check the symbol "
@@ -318,8 +427,13 @@ class ProviderHttp:
                 self._active_host = base
                 return payload
 
+        prefix = (
+            unreachable_prefix
+            if unreachable_prefix is not None
+            else f"Provider unreachable while fetching {context}"
+        )
         raise NetworkError(
-            f"Provider unreachable while fetching {context} after "
+            f"{prefix} after "
             f"{attempts_total} attempts ({last_reason}). No prompt generated."
         )
 

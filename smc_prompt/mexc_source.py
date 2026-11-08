@@ -24,8 +24,10 @@ from .errors import NetworkError, SymbolNotFoundError
 from .models import Candle
 from .provider_base import (
     ProviderHttp,
+    SymbolMetadata,
     candle_delta,
     closed_ltf_fallback_price,
+    get_json_once,
     ms_to_utc,
     parse_decimal,
     price_sanity_warning,
@@ -103,7 +105,7 @@ class MexcSource:
                 )
         return payload
 
-    def validate_symbol(self) -> dict[str, Any]:
+    def validate_symbol(self) -> SymbolMetadata:
         """Validasi simbol terhadap detail kontrak MEXC Futures dan peroleh ukuran tick (tickSize)."""
 
         target = cfg.provider_symbol(cfg.PROVIDER_MEXC, self._config.symbol)
@@ -125,16 +127,11 @@ class MexcSource:
         else:
             tick_size = Decimal("0.01")
 
-        return {
-            "symbol": target,
-            "status": "TRADING",
-            "filters": [
-                {
-                    "filterType": "PRICE_FILTER",
-                    "tickSize": str(tick_size),
-                }
-            ],
-        }
+        return SymbolMetadata(
+            symbol=target,
+            status="TRADING",
+            tick_size=str(tick_size),
+        )
 
     def fetch_klines(
         self, interval: str, limit: int, *, symbol: str | None = None
@@ -238,3 +235,41 @@ class MexcSource:
         except Exception:
             pass
         return self._now()
+
+    def fetch_derivatives_info(self) -> dict[str, Any]:
+        """Ambil Funding Rate & Open Interest (holdVol) dari endpoint ticker MEXC Futures."""
+
+        symbol = cfg.provider_symbol(cfg.PROVIDER_MEXC, self._config.symbol)
+        for host in self._hosts:
+            url = f"{host.rstrip('/')}{TICKER_PATH}"
+            try:
+                payload = get_json_once(
+                    self._http.session,
+                    url,
+                    {"symbol": symbol},
+                    timeout=self._config.request_timeout,
+                )
+                if not isinstance(payload, dict) or payload.get("code", 0) != 0:
+                    continue
+                data = payload.get("data")
+                if not isinstance(data, dict):
+                    continue
+
+                funding_rate = (
+                    data.get("fundingRate")
+                    if data.get("fundingRate") is not None
+                    else data.get("funding_rate")
+                )
+                open_interest = (
+                    data.get("holdVol")
+                    if data.get("holdVol") is not None
+                    else data.get("openInterest", data.get("open_interest"))
+                )
+                return {
+                    "source_label": cfg.provider_label(cfg.PROVIDER_MEXC),
+                    "funding_rate": funding_rate,
+                    "open_interest": open_interest,
+                }
+            except (Exception, AssertionError):
+                continue
+        return {}

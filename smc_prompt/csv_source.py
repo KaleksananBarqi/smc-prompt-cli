@@ -37,6 +37,7 @@ from typing import Sequence
 from . import config as cfg
 from .errors import ConfigError
 from .models import Candle
+from .provider_base import SymbolMetadata
 
 #: Required CSV column names (case-insensitive, matched after stripping).
 _REQUIRED_COLUMNS: frozenset[str] = frozenset(
@@ -314,16 +315,10 @@ class LocalCsvSource:
 
         return self
 
-    def validate_symbol(self) -> dict:
-        """Return a synthetic ``exchangeInfo``-shaped entry.
+    def validate_symbol(self) -> SymbolMetadata:
+        """Return a structured :class:`SymbolMetadata` for offline CSV mode."""
 
-        Offline mode performs no network symbol lookup. The returned dict keeps
-        the caller's ``_extract_tick_size`` / status handling branch-free: it has
-        no ``PRICE_FILTER`` (so the magnitude-based price rule applies) and
-        reports ``status='TRADING'`` (no spurious non-TRADING warning).
-        """
-
-        return {"symbol": self._config.symbol, "status": "TRADING", "filters": []}
+        return SymbolMetadata(symbol=self._config.symbol, status="TRADING", tick_size=None)
 
     def fetch_server_time(self) -> datetime:
         """Return a deterministic instant derived from the CSV files.

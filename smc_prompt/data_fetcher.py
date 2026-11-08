@@ -1,13 +1,15 @@
 """Binance Futures (USDT-M) public REST client (read-only market data only).
 
 Endpoints (no API key, no signed/private routes, spec §4.1):
-  * ``GET /fapi/v1/klines``        — HTF daily / LTF hourly OHLCV
-  * ``GET /fapi/v1/ticker/price``  — current price
-  * ``GET /fapi/v1/exchangeInfo``  — symbol validation (+ tickSize, status)
-  * ``GET /fapi/v1/time``          — server time (clock-skew-safe closure)
+  * ``GET /fapi/v1/klines``                 — HTF daily / LTF hourly OHLCV
+  * ``GET /fapi/v1/ticker/price``           — current price
+  * ``GET /fapi/v1/exchangeInfo``           — symbol validation (+ tickSize, status)
+  * ``GET /fapi/v1/time``                   — server time (clock-skew-safe closure)
+  * ``GET /fapi/v1/premiumIndex``           — funding rate
+  * ``GET /fapi/v1/openInterest``           — current open interest
+  * ``GET /futures/data/openInterestHist``  — 4H open interest delta
 
-Includes retry-with-backoff (spec §9.4) and base-URL failover on connection
-errors / HTTP 451 / HTTP 403.
+Includes retry-with-backoff (spec §9.4) and base-URL failover via :class:`ProviderHttp`.
 """
 
 from __future__ import annotations
@@ -23,66 +25,22 @@ import requests
 from . import config as cfg
 from .errors import NetworkError, SymbolNotFoundError
 from .models import Candle
+from .provider_base import (
+    ProviderHttp,
+    SymbolMetadata,
+    extract_tick_size,
+    get_json_once,
+    ms_to_utc,
+    price_sanity_warning,
+    price_within_band,
+)
 
-#: HTTP statuses that mean "this host is blocked for us" -> try the next host.
-_HOST_BLOCK_STATUSES: frozenset[int] = frozenset({403, 451})
+PREMIUM_INDEX_PATH: str = "/fapi/v1/premiumIndex"
+OPEN_INTEREST_PATH: str = "/fapi/v1/openInterest"
+OPEN_INTEREST_HIST_PATH: str = "/futures/data/openInterestHist"
 
-#: HTTP statuses that mean the request itself is invalid -> no retry.
-_FATAL_CLIENT_STATUSES: frozenset[int] = frozenset({400, 404})
-
-#: HTTP statuses worth retrying on the same host.
-_RETRY_STATUSES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
-
-
-def _ms_to_utc(ms: int | float | str) -> datetime:
-    """Convert a Binance millisecond timestamp to an aware UTC datetime."""
-
-    return datetime.fromtimestamp(int(ms) / 1000.0, tz=timezone.utc)
-
-
-def price_within_band(
-    price: Decimal,
-    reference_candle: Candle | None,
-    tolerance: Decimal | None,
-) -> bool:
-    """True when ``price`` lies within ``reference.low - tol .. reference.high + tol``.
-
-    A missing reference candle or tolerance degrades to "always plausible"
-    (no basis for a cross-check), keeping the callers branch-free.
-    """
-
-    if reference_candle is None or tolerance is None:
-        return True
-    return (
-        reference_candle.low - tolerance
-        <= price
-        <= reference_candle.high + tolerance
-    )
-
-
-def price_sanity_warning(
-    price: Decimal,
-    reference_candle: Candle | None,
-    tolerance: Decimal | None,
-    *,
-    symbol: str,
-) -> str | None:
-    """Non-fatal warning when ``price`` is outside the last-candle band ± ATR.
-
-    Returns ``None`` when the price is plausible (or cannot be cross-checked).
-    The message is deterministic; it is emitted on stderr by the CLI and never
-    alters the rendered prompt.
-    """
-
-    if price_within_band(price, reference_candle, tolerance):
-        return None
-    band = tolerance if tolerance is not None else Decimal("0")
-    return (
-        f"Current price {cfg.fmt_price(price)} is outside the last closed "
-        f"candle range [{cfg.fmt_price(reference_candle.low)}, "
-        f"{cfg.fmt_price(reference_candle.high)}] ± {cfg.fmt_price(band)}; "
-        f"possible stale {symbol} ticker data. Prompt generated with caution."
-    )
+# Alias fungsi privat untuk kompatibilitas mundur apabila diimpor oleh kode/test lama
+_ms_to_utc = ms_to_utc
 
 
 class DataFetcher:
@@ -105,6 +63,12 @@ class DataFetcher:
         #: injects the Binance server time here (host-clock fallback) so a
         #: skewed local clock cannot leak a half-formed candle into analysis.
         self._now = now or (lambda: datetime.now(timezone.utc))
+        self._http = ProviderHttp(
+            config,
+            session=self._session,
+            sleep=self._sleep,
+            rand=self._rand,
+        )
         self._active_base_url: str | None = None
         self._price_notes: list[str] = []
 
@@ -132,90 +96,30 @@ class DataFetcher:
         )
 
     # ------------------------------------------------------------------
-    # Internals
+    # Internals (delegated to ProviderHttp)
     # ------------------------------------------------------------------
 
-    def _jitter(self) -> float:
-        """Small +/-250ms jitter; affects network timing only, not output."""
-
-        return (self._rand() - 0.5) * 0.5
-
-    def _backoff(self, attempt: int) -> float:
-        return self._config.retry_backoff_base * (
-            self._config.retry_backoff_factor ** attempt
-        ) + self._jitter()
-
     def _request_json(self, path: str, params: dict[str, Any]) -> Any:
-        """GET ``path`` with retry/backoff and base-URL failover.
+        """GET ``path`` with retry/backoff and base-URL failover via :class:`ProviderHttp`.
 
         Raises :class:`SymbolNotFoundError` for invalid-symbol responses and
         :class:`NetworkError` once every host/attempt pair is exhausted.
         """
 
         hosts: Sequence[str] = self._config.base_urls
-        last_reason = "unknown error"
-        attempts_total = 0
-
-        for host in hosts:
-            url = f"{host}{path}"
-            for attempt in range(self._config.retry_max):
-                attempts_total += 1
-                try:
-                    response = self._session.get(
-                        url,
-                        params=params,
-                        timeout=self._config.request_timeout,
-                        headers={"User-Agent": "smc-prompt/0.1"},
-                    )
-                except (requests.ConnectionError, requests.Timeout) as exc:
-                    last_reason = f"{type(exc).__name__}: {exc}"
-                    if attempt < self._config.retry_max - 1:
-                        self._sleep(self._backoff(attempt))
-                        continue
-                    break
-
-                status = response.status_code
-
-                if status in _HOST_BLOCK_STATUSES:
-                    # Geo-block / forbidden for this host: stop retrying it and
-                    # fail over to the next approved base URL.
-                    last_reason = f"HTTP {status} from {host}"
-                    break
-
-                if status in _FATAL_CLIENT_STATUSES:
-                    # 400 commonly means "symbol does not exist" for klines.
-                    raise SymbolNotFoundError(
-                        f"Symbol '{self._config.symbol}' is not listed on "
-                        f"Binance Futures. Check the spelling (e.g. BTCUSDT)."
-                    )
-
-                if status in _RETRY_STATUSES:
-                    last_reason = f"HTTP {status} from {host}"
-                    if attempt < self._config.retry_max - 1:
-                        self._sleep(self._backoff(attempt))
-                        continue
-                    break
-
-                if status >= 400:
-                    last_reason = f"HTTP {status} from {host}"
-                    break
-
-                try:
-                    payload = response.json()
-                except ValueError as exc:
-                    last_reason = f"invalid JSON from {host}: {exc}"
-                    if attempt < self._config.retry_max - 1:
-                        self._sleep(self._backoff(attempt))
-                        continue
-                    break
-
-                self._active_base_url = host
-                return payload
-
-        raise NetworkError(
-            f"Binance API unreachable after {attempts_total} attempts "
-            f"({last_reason}). No prompt generated."
+        payload = self._http.get_json(
+            hosts,
+            path,
+            params,
+            context=f"{self._config.symbol} {path}",
+            not_found_message=(
+                f"Symbol '{self._config.symbol}' is not listed on "
+                f"Binance Futures. Check the spelling (e.g. BTCUSDT)."
+            ),
+            unreachable_prefix="Binance API unreachable",
         )
+        self._active_base_url = self._http.active_host
+        return payload
 
     # ------------------------------------------------------------------
     # Public API
@@ -225,7 +129,7 @@ class DataFetcher:
     def active_base_url(self) -> str | None:
         """Host that served the last successful request."""
 
-        return self._active_base_url
+        return self._active_base_url or self._http.active_host
 
     def fetch_server_time(self) -> datetime:
         """Fetch the Binance server time (``GET /fapi/v1/time``).
@@ -243,14 +147,14 @@ class DataFetcher:
             raise NetworkError(
                 f"server time endpoint returned no serverTime field ({exc})."
             ) from exc
-        return _ms_to_utc(server_ms)
+        return ms_to_utc(server_ms)
 
-    def validate_symbol(self) -> dict[str, Any]:
+    def validate_symbol(self) -> SymbolMetadata:
         """Validate the symbol against ``exchangeInfo`` (spec §9.3).
 
-        Returns the raw ``exchangeInfo`` entry so the caller can derive
-        ``PRICE_FILTER.tickSize`` precision and surface a non-TRADING
-        ``status`` warning (the entry is *not* discarded).
+        Returns a structured :class:`SymbolMetadata` (which also supports
+        dict-style subscripting) so the caller can derive ``tickSize``
+        precision and surface a non-TRADING ``status`` warning.
         """
 
         payload = self._request_json(
@@ -268,7 +172,19 @@ class DataFetcher:
                 f"Symbol '{self._config.symbol}' is not listed on Binance "
                 f"Futures. Check the spelling (e.g. BTCUSDT)."
             )
-        return matched[0]
+        entry = matched[0]
+        raw_filters_list = entry.get("filters") if isinstance(entry, dict) else None
+        raw_filters = (
+            tuple(f for f in raw_filters_list if isinstance(f, dict))
+            if isinstance(raw_filters_list, list)
+            else ()
+        )
+        return SymbolMetadata(
+            symbol=str(entry.get("symbol") or self._config.symbol),
+            status=str(entry.get("status") or "TRADING"),
+            tick_size=extract_tick_size(entry),
+            raw_filters=raw_filters,
+        )
 
     def fetch_klines(
         self, interval: str, limit: int, *, symbol: str | None = None
@@ -289,11 +205,11 @@ class DataFetcher:
         now = self._now()
         candles: list[Candle] = []
         for row in raw:
-            close_time = _ms_to_utc(row[6])
+            close_time = ms_to_utc(row[6])
             is_closed = now >= close_time + timedelta(seconds=1)
             candles.append(
                 Candle(
-                    open_time=_ms_to_utc(row[0]),
+                    open_time=ms_to_utc(row[0]),
                     open=Decimal(str(row[1])),
                     high=Decimal(str(row[2])),
                     low=Decimal(str(row[3])),
@@ -329,24 +245,7 @@ class DataFetcher:
         reference_candle: Candle | None = None,
         tolerance: Decimal | None = None,
     ) -> Decimal:
-        """Fetch the current price via ticker/price, falling back to kline close.
-
-        Uses the last *closed* LTF candle close as fallback; the half-open
-        candle is never used for anything else (spec §4.3).
-
-        Sanity checks (§ robustness cluster):
-
-        * ``price > 0`` — a non-positive ticker value is rejected.
-        * plausibility cross-check — when ``reference_candle`` (the last closed
-          LTF candle) and ``tolerance`` (``1 × ATR(14)``) are supplied, a ticker
-          price outside the candle's ``[low, high]`` band ± tolerance is
-          rejected as implausible.
-
-        A rejected ticker is downgraded to the closed-candle fallback and the
-        reason is recorded in :attr:`price_notes` (the CLI emits it as a
-        non-fatal WARN). A :class:`NetworkError` is raised only when *no* valid
-        price can be determined at all.
-        """
+        """Fetch the current price via ticker/price, falling back to kline close."""
 
         self._price_notes = []
         ticker_error: str | None = None
@@ -380,3 +279,62 @@ class DataFetcher:
                 f"{cfg.fmt_price(fallback)} instead."
             )
         return fallback
+
+    def fetch_derivatives_info(self) -> dict[str, Any]:
+        """Ambil statistik derivatif (Funding Rate, Open Interest, dan Hist 4H) dari Binance Futures."""
+
+        symbol = cfg.provider_symbol(cfg.PROVIDER_BINANCE, self._config.symbol)
+        hosts = self._config.base_urls or cfg.DEFAULT_BASE_URLS
+        timeout = self._config.request_timeout
+
+        for host in hosts:
+            base = host.rstrip("/")
+            try:
+                prem = get_json_once(
+                    self._session,
+                    f"{base}{PREMIUM_INDEX_PATH}",
+                    {"symbol": symbol},
+                    timeout=timeout,
+                )
+                if not isinstance(prem, dict) or "lastFundingRate" not in prem:
+                    continue
+
+                oi_payload = get_json_once(
+                    self._session,
+                    f"{base}{OPEN_INTEREST_PATH}",
+                    {"symbol": symbol},
+                    timeout=timeout,
+                )
+                if not isinstance(oi_payload, dict) or "openInterest" not in oi_payload:
+                    continue
+
+                prev_oi = None
+                latest_oi = None
+                try:
+                    hist = get_json_once(
+                        self._session,
+                        f"{base}{OPEN_INTEREST_HIST_PATH}",
+                        {"symbol": symbol, "period": "4h", "limit": 2},
+                        timeout=timeout,
+                    )
+                    if isinstance(hist, list) and len(hist) >= 2:
+                        prev_entry = hist[-2]
+                        latest_entry = hist[-1]
+                        if isinstance(prev_entry, dict) and isinstance(latest_entry, dict):
+                            prev_oi = prev_entry.get("sumOpenInterest") or prev_entry.get("openInterest")
+                            latest_oi = latest_entry.get("sumOpenInterest") or latest_entry.get("openInterest")
+                except (Exception, AssertionError):
+                    prev_oi = None
+                    latest_oi = None
+
+                return {
+                    "source_label": cfg.provider_label(cfg.PROVIDER_BINANCE),
+                    "funding_rate": prem.get("lastFundingRate"),
+                    "open_interest": oi_payload.get("openInterest"),
+                    "prev_open_interest": prev_oi,
+                    "latest_open_interest": latest_oi,
+                }
+            except (Exception, AssertionError):
+                continue
+
+        return {}
