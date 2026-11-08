@@ -360,3 +360,25 @@ def test_render_review_markdown_dual_entry_and_excursion() -> None:
     assert "Urutan Sentuh Pertama (First-Touch):** TP1" in md
     assert "Konteks Struktur Pasar Mock" in md
 
+
+def test_cli_review_mode_excursion_anchored_to_entry_not_exit(tmp_path: Path) -> None:
+    """Memastikan MFE/MAE pada mode review dihitung dari entry, bukan dari exit_price."""
+    res = cli.run(
+        "BTCUSDT",
+        candles_only=True,
+        review_interval="1h",
+        review_candles=15,
+        direction="long",
+        entry=60000.0,
+        sl=59000.0,
+        tp=63000.0,
+        exit_price=62000.0,
+        outcome="Cut Manual",
+        input_csv=str(HTF_CSV),
+        output_dir=str(tmp_path),
+    )
+
+    # Pada HTF_CSV, pastikan fakta ekskursi dirender dan Realized R dihitung dari entry 60000 (risk 1000) -> +2.00R
+    assert "Realized: +2.00R | PnL: +2000.00 poin" in res.prompt
+    assert "Fakta Ekskursi Harga Mekanis" in res.prompt
+

@@ -118,13 +118,33 @@ class TradeJournalSpec:
         )
 
     @property
+    def plan(self) -> TradePlan | None:
+        """Representasi TradePlan terpadu jika Entry 1 dan TP1 valid, atau None."""
+        if self.entry_price is None or self.tp_price is None:
+            return None
+        try:
+            return build_trade_plan(
+                direction=self.direction,
+                entry1=self.entry_price,
+                entry2=self.entry2_price,
+                sl=self.sl_price,
+                tp1=self.tp_price,
+                tp2=self.tp2_price,
+            )
+        except ConfigError:
+            return None
+
+    @property
     def is_dual_entry(self) -> bool:
         """True jika jurnal memuat spesifikasi Entry 2."""
         return self.entry2_price is not None
 
     @property
     def blended_entry(self) -> Decimal | None:
-        """Kalkulasi harga rata-rata tertimbang Blended Entry."""
+        """Kalkulasi harga rata-rata tertimbang Blended Entry melalui TradePlan."""
+        p = self.plan
+        if p is not None:
+            return p.blended_entry
         if self.entry_price is None:
             return None
         if self.entry2_price is None:
@@ -134,17 +154,29 @@ class TradeJournalSpec:
 
     @property
     def active_entry(self) -> Decimal | None:
-        """Harga entry acuan yang terealisasi berdasarkan leg yang terisi."""
+        """Harga entry acuan yang terealisasi berdasarkan leg yang terisi atau hasil ekskursi."""
+        p = self.plan
+        if p is not None:
+            if self.filled_legs is not None:
+                return p.resolve_active_entry(self.filled_legs)
+            if self.excursion is not None and self.excursion.active_entry is not None:
+                return self.excursion.active_entry
+            return p.blended_entry
         if self.filled_legs == "e1":
             return self.entry_price
         if self.filled_legs == "e2":
             return self.entry2_price
+        if self.excursion is not None and self.excursion.active_entry is not None:
+            return self.excursion.active_entry
         return self.blended_entry
 
     @property
     def risk_reward_ratio(self) -> Decimal | None:
-        """Kalkulasi rasio R:R terencana ke TP1."""
+        """Kalkulasi rasio R:R terencana ke TP1 melalui TradePlan."""
+        p = self.plan
         ref_entry = self.active_entry
+        if p is not None and ref_entry is not None:
+            return p.rr_tp1(from_entry=ref_entry)
         if ref_entry is None or self.sl_price is None or self.tp_price is None:
             return None
         risk = abs(ref_entry - self.sl_price)
@@ -155,8 +187,11 @@ class TradeJournalSpec:
 
     @property
     def risk_reward_ratio_tp2(self) -> Decimal | None:
-        """Kalkulasi rasio R:R terencana ke TP2."""
+        """Kalkulasi rasio R:R terencana ke TP2 melalui TradePlan."""
+        p = self.plan
         ref_entry = self.active_entry
+        if p is not None and ref_entry is not None:
+            return p.rr_tp2(from_entry=ref_entry)
         if ref_entry is None or self.sl_price is None or self.tp2_price is None:
             return None
         risk = abs(ref_entry - self.sl_price)
@@ -168,22 +203,27 @@ class TradeJournalSpec:
     @property
     def realized_pnl_points(self) -> Decimal | None:
         """Selisih poin harga riil yang terealisasi (exit vs entry acuan)."""
+        p = self.plan
         ref_entry = self.active_entry
+        if p is not None and ref_entry is not None:
+            return p.realized_pnl_points(self.exit_price, from_entry=ref_entry)
         if ref_entry is None or self.exit_price is None:
             return None
         is_short = (self.direction or "").lower() == "short"
-        diff = (
+        return (
             ref_entry - self.exit_price
             if is_short
             else self.exit_price - ref_entry
         )
-        return diff
 
     @property
     def realized_r_multiple(self) -> Decimal | None:
         """Realisasi R-Multiple dari trade (Realized R)."""
-        pnl = self.realized_pnl_points
+        p = self.plan
         ref_entry = self.active_entry
+        if p is not None and ref_entry is not None:
+            return p.realized_r_multiple(self.exit_price, from_entry=ref_entry)
+        pnl = self.realized_pnl_points
         if pnl is None or ref_entry is None or self.sl_price is None:
             return None
         risk = abs(ref_entry - self.sl_price)

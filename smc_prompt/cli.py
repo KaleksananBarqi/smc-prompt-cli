@@ -30,6 +30,13 @@ from .errors import (
     exit_code_for,
 )
 from .gate_source import GateSource
+from .market_acquisition import (
+    AcquisitionMode,
+    MarketSnapshot,
+    acquire_market_snapshot,
+    extract_tick_size as _extract_tick_size_impl,
+    resolve_mode_intervals,
+)
 from .market_context import fetch_btc_benchmark_context, fetch_derivatives_context
 from .mexc_source import MexcSource
 from .models import Candle
@@ -79,24 +86,6 @@ class RunResult:
     #: were validated and resolved settings printed, but nothing was fetched,
     #: rendered, or written.
     dry_run: bool = False
-
-
-@dataclass(frozen=True)
-class _AcquiredMarketData:
-    """Struktur data kontainer hasil penarikan data pasar dari exchange aktif."""
-
-    mode: str
-    fetcher: Any
-    active_config: cfg.Config
-    server_time: datetime | None
-    candidate_warnings: list[str]
-    raw_candles: list[Candle] = field(default_factory=list)
-    htf_raw: list[Candle] = field(default_factory=list)
-    mtf_raw: list[Candle] = field(default_factory=list)
-    ltf_raw: list[Candle] = field(default_factory=list)
-    ltf_atr: Decimal | None = None
-    reference_candle: Candle | None = None
-    current_price: Decimal | None = None
 
 
 def _ensure_utf8_streams() -> None:
@@ -273,14 +262,7 @@ def _extract_tick_size(entry: dict) -> str | None:
     so the caller falls back to the magnitude-bucketed formatting rule.
     """
 
-    filters = entry.get("filters") if isinstance(entry, dict) else None
-    if not isinstance(filters, list):
-        return None
-    for item in filters:
-        if isinstance(item, dict) and item.get("filterType") == "PRICE_FILTER":
-            tick = item.get("tickSize")
-            return str(tick) if tick is not None else None
-    return None
+    return _extract_tick_size_impl(entry)
 
 
 def _print_resolved_settings(
@@ -530,23 +512,23 @@ def run(
         cfg.validate_interval(validate_interval, flag="--validate-interval")
         cfg.provider_interval(provider, validate_interval)
         cfg.validate_validate_candles(validate_candles)
-        if validate_interval not in (htf_interval, mtf_interval, ltf_interval):
-            ltf_interval = validate_interval
-            if ltf_interval == mtf_interval:
-                mtf_interval = "4h" if ltf_interval != "4h" else "2h"
-            if ltf_interval == htf_interval:
-                htf_interval = "1d" if ltf_interval != "1d" else "1w"
+        htf_interval, mtf_interval, ltf_interval = resolve_mode_intervals(
+            htf_interval,
+            mtf_interval,
+            ltf_interval,
+            target_interval=validate_interval,
+        )
 
     elif candles_only:
         cfg.validate_interval(review_interval, flag="--review-interval")
         cfg.provider_interval(provider, review_interval)
         cfg.validate_review_candles(review_candles)
-        if review_interval not in (htf_interval, mtf_interval, ltf_interval):
-            ltf_interval = review_interval
-            if ltf_interval == mtf_interval:
-                mtf_interval = "4h" if ltf_interval != "4h" else "2h"
-            if ltf_interval == htf_interval:
-                htf_interval = "1d" if ltf_interval != "1d" else "1w"
+        htf_interval, mtf_interval, ltf_interval = resolve_mode_intervals(
+            htf_interval,
+            mtf_interval,
+            ltf_interval,
+            target_interval=review_interval,
+        )
 
         if resolved_entry1 is not None and resolved_tp1 is not None:
             plan = build_trade_plan(
@@ -632,216 +614,47 @@ def run(
         )
         return RunResult("", "", False, False, (), dry_run=True)
 
-    warnings: list[str] = []
+    acq_mode: AcquisitionMode = (
+        "candles_only"
+        if candles_only
+        else ("validate_setup" if validate_setup else "prompt")
+    )
+    single_interval = (
+        review_interval
+        if candles_only
+        else (validate_interval if validate_setup else None)
+    )
+    single_candles = (
+        review_candles
+        if candles_only
+        else (validate_candles if validate_setup else None)
+    )
 
-    # Tentukan urutan provider untuk automatic failover.
-    # Offline mode, flag --no-fallback, atau provider FX non-crypto (TwelveData, OANDA) mengecualikan failover.
-    if offline_mode or no_fallback or config.provider not in cfg.CRYPTO_FAILOVER_CHAIN:
-        candidates = [config.provider]
-    else:
-        start_idx = cfg.CRYPTO_FAILOVER_CHAIN.index(config.provider)
-        candidates = list(cfg.CRYPTO_FAILOVER_CHAIN[start_idx:])
-
-    acquired_data: _AcquiredMarketData | None = None
-    last_network_exc: NetworkError | None = None
-
-    for candidate_idx, candidate_provider in enumerate(candidates):
-        is_fallback = candidate_provider != config.provider
-        active_config = replace(config, provider=candidate_provider)
-
-        # Validasi dukungan interval pada candidate exchange.
-        # Jika candidate adalah exchange perantara dalam rantai failover (bukan provider pilihan awal user)
-        # dan tidak mendukung interval yang diminta (contoh: MEXC tidak mendukung 2h saat failover dari Binance),
-        # lewati kandidat tersebut dan lanjutkan ke exchange berikutnya dalam rantai.
-        needed_intervals: list[str]
-        if candles_only:
-            needed_intervals = [review_interval]
-        elif validate_setup:
-            needed_intervals = [validate_interval]
-        else:
-            needed_intervals = [
-                active_config.htf_interval,
-                active_config.mtf_interval,
-                active_config.ltf_interval,
-            ]
-
-        unsupported_interval: str | None = None
-        for intv in needed_intervals:
-            try:
-                cfg.provider_interval(candidate_provider, intv)
-            except ConfigError:
-                unsupported_interval = intv
-                break
-
-        if unsupported_interval is not None:
-            if is_fallback and candidate_idx + 1 < len(candidates):
-                next_p = candidates[candidate_idx + 1]
-                skip_msg = (
-                    f"{cfg.provider_label(candidate_provider)} tidak mendukung interval '{unsupported_interval}'. "
-                    f"Melewati dan beralih ke {cfg.provider_label(next_p)}..."
-                )
-                warnings.append(skip_msg)
-                _warn(skip_msg)
-                continue
-            raise ConfigError(
-                f"Provider '{cfg.provider_label(candidate_provider)}' does not support the "
-                f"interval '{unsupported_interval}'."
-            )
-
-        fetcher = _build_fetcher(
-            candidate_provider,
-            active_config,
-            offline_mode=offline_mode,
-            offline_htf=offline_htf,
-            offline_mtf=offline_mtf,
-            offline_ltf=offline_ltf,
-            key=key,
-            token=token,
-            account_id=account_id,
-            oanda_env=oanda_env,
-        )
-
-        try:
-            # 1. Validasi simbol & presisi harga
-            symbol_entry = fetcher.validate_symbol()
-            tick_size = _extract_tick_size(symbol_entry)
-            active_config = replace(
-                active_config,
-                price_format=cfg.PriceFormat(cfg.decimals_from_tick_size(tick_size)),
-            )
-
-            status = symbol_entry.get("status")
-            candidate_warnings: list[str] = []
-            if isinstance(status, str) and status and status != "TRADING":
-                candidate_warnings.append(SymbolStatusWarning(active_config.symbol, status).message())
-
-            # 2. Sinkronisasi jam server
-            server_time: datetime | None = None
-            if offline_mode:
-                server_time = fetcher.fetch_server_time()
-            else:
-                try:
-                    server_time = fetcher.fetch_server_time()
-                except NetworkError as exc:
-                    _warn(
-                        f"{active_config.provider_label} server time unavailable ({exc}); "
-                        f"falling back to the host clock for candle-closure and "
-                        f"GENERATED_AT_UTC."
-                    )
-            if server_time is not None:
-                fetcher = fetcher.with_now(server_time)
-
-            # 3. Penarikan candle & harga sesuai mode
-            if candles_only:
-                fetch_limit = min(
-                    max(review_candles + 20, 100) if not no_structure else review_candles + 20,
-                    cfg.FETCH_LIMIT_MAX,
-                )
-                raw_candles = fetcher.fetch_klines(review_interval, fetch_limit)
-                acquired_data = _AcquiredMarketData(
-                    mode="candles_only",
-                    fetcher=fetcher,
-                    active_config=active_config,
-                    server_time=server_time,
-                    candidate_warnings=candidate_warnings,
-                    raw_candles=raw_candles,
-                )
-            elif validate_setup:
-                fetch_limit = min(
-                    max(validate_candles + 20, 100) if not no_structure else validate_candles + 20,
-                    cfg.FETCH_LIMIT_MAX,
-                )
-                raw_candles = fetcher.fetch_klines(validate_interval, fetch_limit)
-                acquired_data = _AcquiredMarketData(
-                    mode="validate_setup",
-                    fetcher=fetcher,
-                    active_config=active_config,
-                    server_time=server_time,
-                    candidate_warnings=candidate_warnings,
-                    raw_candles=raw_candles,
-                )
-            else:
-                htf_raw = fetcher.fetch_klines(active_config.htf_interval, active_config.htf_fetch_limit)
-                mtf_raw = fetcher.fetch_klines(active_config.mtf_interval, active_config.mtf_fetch_limit)
-                ltf_raw = fetcher.fetch_klines(active_config.ltf_interval, active_config.ltf_fetch_limit)
-
-                ltf_closed = [candle for candle in ltf_raw if candle.is_closed]
-                ltf_atr: Decimal | None = None
-                if len(ltf_closed) >= active_config.atr_period + 1:
-                    ltf_atr = compute_atr(ltf_closed, active_config.atr_period)
-                reference_candle = ltf_closed[-1] if ltf_closed else None
-
-                current_price = fetcher.fetch_current_price(
-                    reference_candle=reference_candle, tolerance=ltf_atr
-                )
-                acquired_data = _AcquiredMarketData(
-                    mode="prompt",
-                    fetcher=fetcher,
-                    active_config=active_config,
-                    server_time=server_time,
-                    candidate_warnings=candidate_warnings,
-                    htf_raw=htf_raw,
-                    mtf_raw=mtf_raw,
-                    ltf_raw=ltf_raw,
-                    ltf_atr=ltf_atr,
-                    reference_candle=reference_candle,
-                    current_price=current_price,
-                )
-
-            if is_fallback:
-                warn_msg = (
-                    f"Koneksi jaringan ke {cfg.provider_label(config.provider)} gagal. "
-                    f"Berhasil beralih otomatis ke {cfg.provider_label(candidate_provider)}."
-                )
-                warnings.append(warn_msg)
-            config = active_config
-            warnings.extend(candidate_warnings)
-            break
-
-        except NetworkError as exc:
-            last_network_exc = exc
-            if candidate_idx + 1 < len(candidates):
-                next_p = candidates[candidate_idx + 1]
-                _warn(
-                    f"Koneksi jaringan ke {cfg.provider_label(candidate_provider)} gagal ({exc}). "
-                    f"Mengalihkan otomatis ke {cfg.provider_label(next_p)}..."
-                )
-                continue
-            raise
-
-    if acquired_data is None:
-        if last_network_exc is not None:
-            raise last_network_exc
-        raise NetworkError("Semua exchange dalam rantai failover tidak dapat dihubungi.")
+    snapshot = acquire_market_snapshot(
+        config,
+        mode=acq_mode,
+        offline_mode=offline_mode,
+        offline_htf=offline_htf,
+        offline_mtf=offline_mtf,
+        offline_ltf=offline_ltf,
+        no_fallback=no_fallback,
+        no_structure=no_structure,
+        single_interval=single_interval,
+        single_candles=single_candles,
+        key=key,
+        token=token,
+        account_id=account_id,
+        oanda_env=oanda_env,
+        source_factory=_build_fetcher,
+        warn_callback=_warn,
+    )
+    config = snapshot.active_config
+    generated_at = snapshot.generated_at
+    warnings = list(snapshot.warnings)
 
     # Post-trade review / candles-only fast-path
-    if acquired_data.mode == "candles_only":
-        for message in warnings:
-            _warn(message)
-
-        raw_candles = acquired_data.raw_candles
-        closed_candles = [c for c in raw_candles if c.is_closed]
-
-        if len(closed_candles) < review_candles:
-            warn_msg = (
-                f"Only {len(closed_candles)} closed {review_interval} candles "
-                f"available (requested {review_candles}). "
-                f"Reduced table to {len(closed_candles)}."
-            )
-            warnings.append(warn_msg)
-            _warn(warn_msg)
-
-        selected_candles = (
-            closed_candles[-review_candles:]
-            if len(closed_candles) >= review_candles
-            else closed_candles
-        )
-        if not selected_candles:
-            raise ConfigError(
-                f"No closed candles available for {config.symbol} at {review_interval}."
-            )
-
-        generated_at = acquired_data.server_time or datetime.now(timezone.utc)
+    if snapshot.mode == "candles_only":
+        selected_candles = list(snapshot.selected_candles)
 
         e1_dec = Decimal(str(resolved_entry1)) if resolved_entry1 is not None else None
         e2_dec = Decimal(str(entry2)) if entry2 is not None else None
@@ -865,7 +678,6 @@ def run(
                     rev_plan,
                     selected_candles,
                     order_status="filled",
-                    active_entry_price=exit_dec,
                 )
             except Exception:
                 excursion_res = None
@@ -883,26 +695,6 @@ def run(
             excursion=excursion_res,
         )
 
-        review_structure_block: str | None = None
-        if not no_structure and len(closed_candles) >= 25:
-            try:
-                curr_p = closed_candles[-1].close
-                struct_res, _, _ = analyze(
-                    closed_candles,
-                    timeframe=review_interval,
-                    requested=min(len(closed_candles), 40),
-                    current_price=curr_p,
-                    config=config,
-                )
-                review_structure_block = render_structure_context_block(
-                    struct_res,
-                    timeframe=review_interval,
-                    current_price=curr_p,
-                    config=config,
-                )
-            except Exception:
-                review_structure_block = None
-
         review_text = render_review_markdown(
             symbol=config.symbol,
             interval=review_interval,
@@ -911,7 +703,7 @@ def run(
             generated_at=generated_at,
             price_format=config.price_format,
             journal=journal,
-            structure_block=review_structure_block,
+            structure_block=snapshot.structure_block,
         )
 
         if print_stdout:
@@ -940,31 +732,8 @@ def run(
         )
 
     # Setup validation fast-path
-    if acquired_data.mode == "validate_setup":
-        for message in warnings:
-            _warn(message)
-
-        raw_candles = acquired_data.raw_candles
-        closed_candles = [c for c in raw_candles if c.is_closed]
-
-        if len(closed_candles) < validate_candles:
-            warn_msg = (
-                f"Only {len(closed_candles)} closed {validate_interval} candles "
-                f"available (requested {validate_candles}). "
-                f"Reduced table to {len(closed_candles)}."
-            )
-            warnings.append(warn_msg)
-            _warn(warn_msg)
-
-        selected_candles = (
-            closed_candles[-validate_candles:]
-            if len(closed_candles) >= validate_candles
-            else closed_candles
-        )
-        if not selected_candles:
-            raise ConfigError(
-                f"No closed candles available for {config.symbol} at {validate_interval}."
-            )
+    if snapshot.mode == "validate_setup":
+        selected_candles = list(snapshot.selected_candles)
 
         assert inferred_direction is not None
         assert resolved_order_status is not None
@@ -983,58 +752,6 @@ def run(
         )
 
         analysis = analyze_setup(setup_spec, selected_candles)
-        generated_at = acquired_data.server_time or datetime.now(timezone.utc)
-
-        val_deriv_line = ""
-        val_btc_line = ""
-        if (
-            not offline_mode
-            and config.provider in cfg.CRYPTO_FAILOVER_CHAIN
-            and (
-                isinstance(
-                    fetcher, (DataFetcher, BitunixSource, MexcSource, GateSource)
-                )
-                or hasattr(fetcher, "fetch_derivatives_info")
-                or hasattr(fetcher, "fetch_btc_benchmark_info")
-            )
-        ):
-            try:
-                val_deriv_line = fetch_derivatives_context(
-                    config,
-                    active_fetcher=fetcher,
-                    offline_mode=offline_mode,
-                )
-            except (Exception, AssertionError):
-                val_deriv_line = ""
-
-            try:
-                val_btc_line = fetch_btc_benchmark_context(
-                    config,
-                    active_fetcher=fetcher,
-                    offline_mode=offline_mode,
-                )
-            except (Exception, AssertionError):
-                val_btc_line = ""
-
-        val_structure_block: str | None = None
-        if not no_structure and len(closed_candles) >= 25:
-            try:
-                curr_p = closed_candles[-1].close
-                struct_res, _, _ = analyze(
-                    closed_candles,
-                    timeframe=validate_interval,
-                    requested=min(len(closed_candles), 40),
-                    current_price=curr_p,
-                    config=config,
-                )
-                val_structure_block = render_structure_context_block(
-                    struct_res,
-                    timeframe=validate_interval,
-                    current_price=curr_p,
-                    config=config,
-                )
-            except Exception:
-                val_structure_block = None
 
         validation_text = render_validation_prompt(
             setup=setup_spec,
@@ -1044,9 +761,9 @@ def run(
             provider_label=config.provider_label,
             generated_at=generated_at,
             price_format=config.price_format,
-            structure_block=val_structure_block,
-            derivatives_context_line=val_deriv_line,
-            btc_benchmark_line=val_btc_line,
+            structure_block=snapshot.structure_block,
+            derivatives_context_line=snapshot.derivatives_context_line,
+            btc_benchmark_line=snapshot.btc_benchmark_line,
         )
 
         if print_stdout:
@@ -1075,27 +792,11 @@ def run(
         )
 
     # Prompt Mode
-    fetcher = acquired_data.fetcher
-    server_time = acquired_data.server_time
-    htf_raw = acquired_data.htf_raw
-    mtf_raw = acquired_data.mtf_raw
-    ltf_raw = acquired_data.ltf_raw
-    ltf_atr = acquired_data.ltf_atr
-    reference_candle = acquired_data.reference_candle
-    current_price = acquired_data.current_price
-
-    warnings.extend(fetcher.price_notes)
-    price_warning = price_sanity_warning(
-        current_price,
-        reference_candle,
-        ltf_atr,
-        symbol=config.symbol,
-        price_format=config.price_format,
-    )
-    if price_warning is not None:
-        warnings.append(price_warning)
-
-    generated_at = server_time or datetime.now(timezone.utc)
+    htf_raw = list(snapshot.htf_raw)
+    mtf_raw = list(snapshot.mtf_raw)
+    ltf_raw = list(snapshot.ltf_raw)
+    current_price = snapshot.current_price
+    assert current_price is not None
 
     htf_result, htf_table, htf_stats = analyze(
         htf_raw,
@@ -1176,43 +877,12 @@ def run(
     # ``provider_name`` is a render variable, not a payload placeholder, so the
     # frozen template stays provider-agnostic while the provenance line always
     # names the source that actually produced the data.
-    derivatives_context_line = ""
-    btc_benchmark_line = ""
-    if (
-        not offline_mode
-        and config.provider in cfg.CRYPTO_FAILOVER_CHAIN
-        and (
-            isinstance(
-                fetcher, (DataFetcher, BitunixSource, MexcSource, GateSource)
-            )
-            or hasattr(fetcher, "fetch_derivatives_info")
-            or hasattr(fetcher, "fetch_btc_benchmark_info")
-        )
-    ):
-        try:
-            derivatives_context_line = fetch_derivatives_context(
-                config,
-                active_fetcher=fetcher,
-                offline_mode=offline_mode,
-            )
-        except (Exception, AssertionError):
-            derivatives_context_line = ""
-
-        try:
-            btc_benchmark_line = fetch_btc_benchmark_context(
-                config,
-                active_fetcher=fetcher,
-                offline_mode=offline_mode,
-            )
-        except (Exception, AssertionError):
-            btc_benchmark_line = ""
-
     rendered = render(
         payload,
         include_atr=config.include_atr,
         provider_name=config.provider_label,
-        derivatives_context_line=derivatives_context_line,
-        btc_benchmark_line=btc_benchmark_line,
+        derivatives_context_line=snapshot.derivatives_context_line,
+        btc_benchmark_line=snapshot.btc_benchmark_line,
     )
     prompt_text = rendered.text
 

@@ -126,3 +126,61 @@ def test_compute_excursion_long_filled():
     assert res.sl_touched is False
     assert res.first_touch_sequence == ("tp1",)
     assert res.first_fill_killzone is not None
+    assert res.active_entry == Decimal("97.0")
+    assert res.filled_legs == "both"
+
+
+def test_compute_excursion_dual_entry_auto_detects_single_leg_e1():
+    """Saat order_status filled pada Dual-Entry namun hanya E1 yang tersentuh candle,
+    active_entry otomatis menggunakan E1 (bukan Blended Entry)."""
+    plan = build_trade_plan(
+        direction="long",
+        entry1="100",
+        entry2="95",
+        sl="90",
+        tp1="110",
+        tp2="120",
+    )
+    candles = [
+        _candle("2026-11-06T08:00:00", "102", "103", "99", "101"),  # E1 hit (low 99 <= 100), E2 (95) untouched
+        _candle("2026-11-06T09:00:00", "101", "112", "100", "111"),  # TP1 hit (high 112 >= 110)
+    ]
+
+    res = compute_excursion(plan, candles, order_status="filled")
+    assert res.e1_filled is True
+    assert res.e2_filled is False
+    assert res.filled_legs == "e1"
+    assert res.active_entry == Decimal("100")
+    # MFE points dari E1 (100) ke 112 = 12; risk E1 = 100 - 90 = 10 -> +1.20R
+    assert res.mfe_points == Decimal("12")
+    assert res.mfe_r == Decimal("1.20")
+    # MAE points dari E1 (100) ke 99 = 1; risk E1 = 10 -> -0.10R
+    assert res.mae_points == Decimal("1")
+    assert res.mae_r == Decimal("0.10")
+
+
+def test_trade_plan_realized_pnl_and_r_multiple():
+    plan_long = build_trade_plan(
+        direction="long",
+        entry1="100",
+        entry2="95",
+        sl="90",
+        tp1="110",
+    )
+    # Blended entry = 97, risk = 7
+    assert plan_long.realized_pnl_points(Decimal("111")) == Decimal("14.0")
+    assert plan_long.realized_r_multiple(Decimal("111")) == Decimal("2.00")
+    # Dari E1 saja (100), risk = 10
+    assert plan_long.realized_pnl_points(Decimal("115"), from_entry=plan_long.entry1) == Decimal("15")
+    assert plan_long.realized_r_multiple(Decimal("115"), from_entry=plan_long.entry1) == Decimal("1.50")
+
+    plan_short = build_trade_plan(
+        direction="short",
+        entry1="100",
+        sl="110",
+        tp1="80",
+    )
+    assert plan_short.realized_pnl_points(Decimal("85")) == Decimal("15")
+    assert plan_short.realized_r_multiple(Decimal("85")) == Decimal("1.50")
+    assert plan_short.realized_pnl_points(Decimal("110")) == Decimal("-10")
+    assert plan_short.realized_r_multiple(Decimal("110")) == Decimal("-1.00")
