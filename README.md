@@ -248,12 +248,15 @@ dan [`smc_prompt/config.py`](smc_prompt/config.py).
 | `--outcome` (atau `--trade-result`) | pilihan: `hit tp` \| `hit sl` \| `be` \| `cut manual` | — | Hasil trade untuk formulir checklist jurnal review pasca-trade: `'Hit TP'`, `'Hit SL'`, `'BE'`, `'Cut Manual'`. |
 | `--exit-price` (atau `--exit`, `--hit-price`) | `float` | — | Level harga exit/hit aktual untuk menghitung Realized PnL (points) dan R-Multiple pada jurnal review. |
 | `--notes` (atau `--review-notes`) | `str` | — | Catatan evaluasi/jurnal kustom untuk mode review pasca-trade. |
-| `--validate-setup` (atau `--check-setup`) | flag | off | **Validasi Setup & Deteksi Front-Run.** Menghasilkan prompt terfokus untuk mengevaluasi apakah limit order/setup yang direncanakan masih valid, sudah ter-front-run, tersapu targetnya, atau sudah terjemput. **Wajib** menyertakan status order via `--unfilled` / `--filled` (atau `--order-status`). |
+| `--validate-setup` (atau `--check-setup`) | flag | off | **Validasi Setup & Deteksi Front-Run.** Menghasilkan prompt terfokus untuk mengevaluasi apakah limit order/setup yang direncanakan masih valid, sudah ter-front-run, tersapu targetnya, atau sudah terjemput. **Wajib** menyertakan status order via `--unfilled` / `--partial` / `--filled` (atau `--order-status`). |
 | `--unfilled` | flag | off | **Kewajiban Status Order:** Menegaskan bahwa limit order masih pending di orderbook dan **belum terisi/terjemput**. Mencegah LLM berhalusinasi menganggap posisi sudah rugi/kena SL berdasarkan candle masa lalu. |
-| `--filled` | flag | off | **Kewajiban Status Order:** Menegaskan bahwa posisi **sudah terisi/terjemput** dan sedang aktif berjalan di pasar untuk evaluasi manajemen trade. |
-| `--order-status` (atau `--status`) | pilihan: `unfilled` \| `filled` | — | Opsi alternatif status order: `unfilled` (alias: `pending`) atau `filled` (alias: `triggered`). |
-| `--entry` | `float` | — | Level harga entry yang direncanakan (wajib untuk `--validate-setup`). |
-| `--tp` | `float` | — | Level harga Take Profit / target DOL yang direncanakan (wajib untuk `--validate-setup`). |
+| `--partial` | flag | off | **Kewajiban Status Order:** Menegaskan bahwa posisi **terisi sebagian (partial fill)** — Entry 1 aktif berjalan (40%), sedangkan limit Entry 2 masih pending di exchange (60%). |
+| `--filled` | flag | off | **Kewajiban Status Order:** Menegaskan bahwa posisi **sudah terisi/terjemput penuh** dan sedang aktif berjalan di pasar untuk evaluasi manajemen trade. |
+| `--order-status` (atau `--status`) | pilihan: `unfilled` \| `partial` \| `filled` | — | Opsi alternatif status order: `unfilled` (alias: `pending`), `partial`, atau `filled` (alias: `triggered`). |
+| `--entry` (atau `--entry1`) | `float` | — | Level harga Entry 1 yang direncanakan (Aggressive / Proximal Edge; wajib untuk `--validate-setup`). |
+| `--entry2` | `float` | `None` | Level harga Entry 2 yang direncanakan (Moderate / 50% CE atau MT; opsional untuk skema Dual-Entry). |
+| `--tp` (atau `--tp1`) | `float` | — | Level harga Take Profit 1 / Nearest DOL yang direncanakan (wajib untuk `--validate-setup`). |
+| `--tp2` | `float` | `None` | Level harga Take Profit 2 / Main DOL yang direncanakan (opsional). |
 | `--sl` | `float` | `None` | Level harga Stop Loss yang direncanakan (opsional untuk `--validate-setup`). |
 | `--direction` | pilihan: `long` \| `short` | otomatis | Arah posisi (`long`/`short`). Bila tidak diisi, otomatis disimpulkan dari perbandingan `entry` dan `tp`. |
 | `--validate-interval` | interval Binance | `15m` | Interval candle LTF untuk melacak riwayat pendekatan harga (misal `15m`, `5m`, `1h`). |
@@ -359,6 +362,8 @@ CLI akan memandu Anda langkah-demi-langkah:
 2. Memilih simbol/ticker (mis. `BTCUSDT`, `ETHUSDT`, `XAUUSD`).
 3. Memilih tindakan (Generate Prompt SMC/ICT, Review Pasca-Trade, atau Validasi Setup).
 4. **Smart Defaults Timeframe:** Cukup tekan `ENTER` untuk menyetujui paket timeframe standar tanpa perlu mengetik ulang!
+5. **Dukungan Dual-Entry & Validasi Proaktif:** Pada mode Review dan Validasi Setup, Anda dapat memasukkan input harga single maupun dual-entry (mis. `65000, 64800` untuk Entry 1 dan 2) dan multi-TP (`67000, 68000`). Wizard memvalidasi kelogisan hierarki harga (posisi SL/TP terhadap arah entry) secara instan via `build_trade_plan()`.
+6. **Perintah One-Liner Otomatis:** Wizard selalu menyajikan perintah terminal satu baris (*one-liner CLI*) yang ekuivalen di kotak ringkasan akhir untuk kenyamanan eksekusi cepat di masa mendatang.
 
 #### 0b. Mengambil data dari Bitunix Futures (USDT-M)
 
@@ -1054,23 +1059,27 @@ smc_prompt/
 ├── __init__.py            # konstanta versi paket
 ├── __main__.py            # memungkinkan `python -m smc_prompt`
 ├── bitunix_source.py      # data source Bitunix USDT-M Futures publik (fapi.bitunix.com)
-├── cli.py                 # entrypoint Click + orkestrasi (failover loop & handler)
+├── cli.py                 # entrypoint Click CLI + orkestrasi perintah
 ├── config.py              # default imutabel, string interval, aturan format, PriceFormat (tickSize)
-├── data_fetcher.py        # klien REST Binance (klines/ticker/exchangeInfo/time) + retry/backoff + failover
+├── csv_source.py          # adapter data candle CSV lokal
+├── data_fetcher.py        # klien REST Binance (klines/ticker/exchangeInfo/time) via ProviderHttp
 ├── dotenv_loader.py       # pemuat kredensial .env opsional dengan prioritas flag > env > .env
 ├── errors.py              # hierarki exception (memetakan exit code) + warning non-fatal
 ├── gate_source.py         # data source Gate.io USDT-M Futures publik (api.gateio.ws)
-├── interactive.py         # Terminal Interactive Wizard (-i / tanpa argumen)
+├── interactive.py         # Terminal Interactive Wizard (-i / tanpa argumen) & format_cli_command
 ├── local_source.py        # pembaca CSV OHLCV offline deterministik (--input-csv)
+├── market_acquisition.py  # snapshot pasar multi-timeframe terisolasi & failover chain
 ├── market_context.py      # pengayaan konteks derivatif (Funding/OI) & BTC benchmark (Binance-First)
 ├── mexc_source.py         # data source MEXC USDT-M Futures publik (api.mexc.com)
 ├── models.py              # dataclass / kontrak payload bertipe
 ├── oanda_source.py        # data source OANDA v20 (XAU_USD, H4 native, flag `complete`)
 ├── output.py              # tulis berkas .md + salin clipboard (best-effort)
-├── provider_base.py       # scaffolding provider bersama: HTTP retry/failover, timestamp, agregasi, price-band
+├── provider_base.py       # scaffolding provider bersama: ProviderHttp, SymbolMetadata, MarketDataSource
+├── review_renderer.py     # perender laporan review pasca-trade & ekskursi MFE/MAE
 ├── setup_validator.py     # analisis validasi setup & deteksi front-run (--validate-setup)
 ├── structure_analyzer.py  # deteksi swing, dealing range, order block, sweep/BOS, klasifikasi, jarak, ATR
-├── template_renderer.py   # pembangun placeholder + render Jinja2
+├── template_renderer.py   # pembangun placeholder + render Jinja2 byte-frozen
+├── trade_plan.py          # domain model TradePlan & kalkulasi metrik ekskursi MFE/MAE
 ├── twelvedata_source.py   # data source Twelve Data (XAU/USD, 4h native)
 └── templates/
     └── prompt_template.j2 # template prompt SMC/ICT v2 (byte-frozen)
