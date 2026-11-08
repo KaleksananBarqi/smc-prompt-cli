@@ -34,10 +34,7 @@ from .models import (
     SwingType,
     TimeframeAnalysis,
 )
-from .structure_analyzer import (
-    format_dealing_range_summary,
-    select_dealing_range_bounds,
-)
+from .structure_analyzer import format_dealing_range_summary
 
 TEMPLATE_PACKAGE = "smc_prompt"
 TEMPLATE_DIR = "templates"
@@ -466,24 +463,135 @@ def _volume_spike(analysis: TimeframeAnalysis) -> str:
     return VOLUME_SPIKE_YES if analysis.volume.is_spike else VOLUME_SPIKE_NO
 
 
-def _fallback_dealing_range(
+def _resolve_dealing_range(
     current_price: Decimal,
     analysis: TimeframeAnalysis,
     *,
     price_format: cfg.PriceFormat | None = None,
 ) -> str:
-    """Hitung Dealing Range menggunakan batas swing aktif (non-broken) yang mengapit harga."""
-
-    lows = [s for s in analysis.swings if s.type is SwingType.LOW]
-    highs = [s for s in analysis.swings if s.type is SwingType.HIGH]
-    recent_low = lows[-1] if lows else analysis.swing_low
-    recent_high = highs[-1] if highs else analysis.swing_high
-    range_low, range_high = select_dealing_range_bounds(
-        analysis.swings, current_price, recent_low, recent_high
-    )
+    """Ambil ringkasan dealing range dari analysis facts atau fallback berbasis swing high/low."""
+    if analysis.reference_facts and analysis.reference_facts.dealing_range_summary:
+        return analysis.reference_facts.dealing_range_summary
     return format_dealing_range_summary(
-        current_price, range_low, range_high, price_format=price_format
+        current_price,
+        analysis.swing_low,
+        analysis.swing_high,
+        price_format=price_format,
     )
+
+
+def _render_timeframe_tables(
+    analysis: TimeframeAnalysis,
+    *,
+    is_daily: bool,
+    config: cfg.Config,
+    current_price: Decimal | None = None,
+    filter_poi_distance: bool = True,
+) -> tuple[str, str, str, str, str]:
+    """Render tabel swings, equal highs, equal lows, FVG table, dan Order Block table."""
+    price_format = config.price_format
+    swings_table = _render_swings(
+        analysis.swings if analysis.swings else (analysis.swing_high, analysis.swing_low),
+        htf=is_daily,
+        limit=config.swings_table_rows,
+        atr=analysis.atr,
+        equal_mult=config.equal_levels_atr_mult,
+        price_format=price_format,
+    )
+    eq_highs = _render_equal_levels(analysis.equal_highs, price_format=price_format)
+    eq_lows = _render_equal_levels(analysis.equal_lows, price_format=price_format)
+
+    filter_price = current_price if filter_poi_distance else None
+    filter_mult = config.max_poi_atr_mult if filter_poi_distance else None
+
+    fvg_table = _render_fvg_table(
+        analysis.fvgs,
+        htf=is_daily,
+        limit=config.fvg_table_rows,
+        total_candles=(analysis.closed_count or analysis.candle_count),
+        price_format=price_format,
+        current_price=filter_price,
+        atr=analysis.atr,
+        max_atr_mult=filter_mult,
+    )
+    ob_table = _render_ob_table(
+        analysis.order_blocks,
+        htf=is_daily,
+        limit=config.ob_table_rows,
+        total_candles=(analysis.closed_count or analysis.candle_count),
+        price_format=price_format,
+        current_price=filter_price,
+        atr=analysis.atr,
+        max_atr_mult=filter_mult,
+    )
+    return swings_table, eq_highs, eq_lows, fvg_table, ob_table
+
+
+def _build_timeframe_payload(
+    prefix: str,
+    analysis: TimeframeAnalysis,
+    candles: Sequence[Candle],
+    *,
+    interval_label: str,
+    is_daily: bool,
+    render_candle_count: int,
+    current_price: Decimal,
+    config: cfg.Config,
+    filter_poi_distance: bool = True,
+) -> dict[str, str]:
+    """Format seluruh 16 placeholder field untuk satu timeframe (HTF, MTF, atau LTF)."""
+    price_format = config.price_format
+    rendered_candles = (
+        list(candles)
+        if config.full_candles
+        else list(candles)[-render_candle_count:]
+    )
+
+    swings_table, eq_highs, eq_lows, fvg_table, ob_table = _render_timeframe_tables(
+        analysis,
+        is_daily=is_daily,
+        config=config,
+        current_price=current_price,
+        filter_poi_distance=filter_poi_distance,
+    )
+
+    facts = analysis.reference_facts
+    ref_high = (
+        facts.ref_high_summary or f"- Ref HIGH: {facts.recent_high}"
+        if facts is not None
+        else ""
+    )
+    ref_low = (
+        facts.ref_low_summary or f"- Ref LOW: {facts.recent_low}"
+        if facts is not None
+        else ""
+    )
+    dealing_range = (
+        facts.dealing_range_summary
+        if facts is not None and facts.dealing_range_summary
+        else _resolve_dealing_range(current_price, analysis, price_format=price_format)
+    )
+
+    return {
+        f"{prefix}_STRUCTURE_CLASS": analysis.structure_class.value,
+        f"{prefix}_REF_HIGH_SUMMARY": ref_high,
+        f"{prefix}_REF_LOW_SUMMARY": ref_low,
+        f"{prefix}_DEALING_RANGE": dealing_range,
+        f"{prefix}_VOLUME_RELATIVE": _volume_relative(analysis),
+        f"{prefix}_VOLUME_SPIKE": _volume_spike(analysis),
+        f"{prefix}_INTERVAL_LABEL": interval_label,
+        f"{prefix}_CANDLE_COUNT": str(len(rendered_candles)),
+        f"{prefix}_CANDLE_TABLE_CSV": render_csv_table(
+            rendered_candles, htf=is_daily, price_format=price_format
+        ),
+        f"{prefix}_SWINGS_TABLE": swings_table,
+        f"{prefix}_EQUAL_HIGHS": eq_highs,
+        f"{prefix}_EQUAL_LOWS": eq_lows,
+        f"{prefix}_FVG_TABLE": fvg_table,
+        f"{prefix}_FVG_COUNT": str(config.fvg_table_rows),
+        f"{prefix}_OB_TABLE": ob_table,
+        f"{prefix}_OB_COUNT": str(config.ob_table_rows),
+    }
 
 
 def render_structure_context_block(
@@ -493,48 +601,19 @@ def render_structure_context_block(
     config: cfg.Config,
 ) -> str:
     """Render blok konteks struktur pasar SMC v2 (Dealing Range, Swings, FVG ce, OB mt)."""
-
     is_daily = not cfg.is_intraday_interval(timeframe)
     interval_lbl = cfg.interval_label(timeframe)
 
-    dealing_range = (
-        analysis.reference_facts.dealing_range_summary
-        if analysis.reference_facts and analysis.reference_facts.dealing_range_summary
-        else _fallback_dealing_range(current_price, analysis, price_format=config.price_format)
+    dealing_range = _resolve_dealing_range(
+        current_price, analysis, price_format=config.price_format
     )
 
-    swings_table = _render_swings(
-        analysis.swings if analysis.swings else (analysis.swing_high, analysis.swing_low),
-        htf=is_daily,
-        limit=config.swings_table_rows,
-        atr=analysis.atr,
-        equal_mult=config.equal_levels_atr_mult,
-        price_format=config.price_format,
-    )
-
-    eq_highs = _render_equal_levels(analysis.equal_highs, price_format=config.price_format)
-    eq_lows = _render_equal_levels(analysis.equal_lows, price_format=config.price_format)
-
-    fvg_table = _render_fvg_table(
-        analysis.fvgs,
-        htf=is_daily,
-        limit=config.fvg_table_rows,
-        total_candles=(analysis.closed_count or analysis.candle_count),
-        price_format=config.price_format,
+    swings_table, eq_highs, eq_lows, fvg_table, ob_table = _render_timeframe_tables(
+        analysis,
+        is_daily=is_daily,
+        config=config,
         current_price=current_price,
-        atr=analysis.atr,
-        max_atr_mult=config.max_poi_atr_mult,
-    )
-
-    ob_table = _render_ob_table(
-        analysis.order_blocks,
-        htf=is_daily,
-        limit=config.ob_table_rows,
-        total_candles=(analysis.closed_count or analysis.candle_count),
-        price_format=config.price_format,
-        current_price=current_price,
-        atr=analysis.atr,
-        max_atr_mult=config.max_poi_atr_mult,
+        filter_poi_distance=True,
     )
 
     lines = [
@@ -581,193 +660,63 @@ def build_payload(
     tick-size derived precision (magnitude fallback when the tick is unknown).
     For the frozen BTCUSDT sample both agree, so the artifact is unchanged.
     """
-
-    price_format = config.price_format
-    fmt = price_format.fmt
-
-    htf_is_daily = not cfg.is_intraday_interval(config.htf_interval)
-    mtf_is_daily = not cfg.is_intraday_interval(config.mtf_interval)
-    ltf_is_daily = not cfg.is_intraday_interval(config.ltf_interval)
-
-    htf_swings = _render_swings(
-        htf.swings if htf.swings else (htf.swing_high, htf.swing_low),
-        htf=htf_is_daily,
-        limit=config.swings_table_rows,
-        atr=htf.atr,
-        equal_mult=config.equal_levels_atr_mult,
-        price_format=price_format,
-    )
-    mtf_swings = _render_swings(
-        mtf.swings if mtf.swings else (mtf.swing_high, mtf.swing_low),
-        htf=mtf_is_daily,
-        limit=config.swings_table_rows,
-        atr=mtf.atr,
-        equal_mult=config.equal_levels_atr_mult,
-        price_format=price_format,
-    )
-    ltf_swings = _render_swings(
-        ltf.swings if ltf.swings else (ltf.swing_high, ltf.swing_low),
-        htf=ltf_is_daily,
-        limit=config.swings_table_rows,
-        atr=ltf.atr,
-        equal_mult=config.equal_levels_atr_mult,
-        price_format=price_format,
-    )
-
-    htf_facts = htf.reference_facts
-    mtf_facts = mtf.reference_facts
-    ltf_facts = ltf.reference_facts
-    if htf_facts is None or mtf_facts is None or ltf_facts is None:
+    if (
+        htf.reference_facts is None
+        or mtf.reference_facts is None
+        or ltf.reference_facts is None
+    ):
         raise SmcPromptError(
             "Reference facts missing from analysis; aborting before render."
         )
 
-    htf_render = (
-        list(htf_candles)
-        if config.full_candles
-        else list(htf_candles)[-config.htf_render_candles :]
-    )
-    mtf_render = (
-        list(mtf_candles)
-        if config.full_candles
-        else list(mtf_candles)[-config.mtf_render_candles :]
-    )
-    ltf_render = (
-        list(ltf_candles)
-        if config.full_candles
-        else list(ltf_candles)[-config.ltf_render_candles :]
-    )
-
+    fmt = config.price_format.fmt
     payload: dict[str, str] = {
         "PAIR": symbol.upper(),
         "GENERATED_AT_UTC": cfg.fmt_generated_at(generated_at),
         "SESSION_KILLZONE_UTC": cfg.fmt_session_killzone(generated_at),
         "CURRENT_PRICE": fmt(current_price),
         "ATR_PCT_OF_PRICE": _atr_pct_of_price(htf, current_price),
-        "HTF_STRUCTURE_CLASS": htf.structure_class.value,
-        "HTF_REF_HIGH_SUMMARY": htf_facts.ref_high_summary or f"- Ref HIGH: {htf_facts.recent_high}",
-        "HTF_REF_LOW_SUMMARY": htf_facts.ref_low_summary or f"- Ref LOW: {htf_facts.recent_low}",
-        "HTF_DEALING_RANGE": htf_facts.dealing_range_summary
-        or _fallback_dealing_range(
-            current_price, htf, price_format=price_format
-        ),
-        "HTF_VOLUME_RELATIVE": _volume_relative(htf),
-        "HTF_VOLUME_SPIKE": _volume_spike(htf),
-        "HTF_INTERVAL_LABEL": config.htf_interval_label,
-        "HTF_CANDLE_COUNT": str(len(htf_render)),
-        "HTF_CANDLE_TABLE_CSV": render_csv_table(
-            htf_render, htf=htf_is_daily, price_format=price_format
-        ),
-        "HTF_SWINGS_TABLE": htf_swings,
-        "HTF_EQUAL_HIGHS": _render_equal_levels(
-            htf.equal_highs, price_format=price_format
-        ),
-        "HTF_EQUAL_LOWS": _render_equal_levels(
-            htf.equal_lows, price_format=price_format
-        ),
-        "HTF_FVG_TABLE": _render_fvg_table(
-            htf.fvgs,
-            htf=htf_is_daily,
-            limit=config.fvg_table_rows,
-            total_candles=(htf.closed_count or htf.candle_count),
-            price_format=price_format,
-        ),
-        "HTF_FVG_COUNT": str(config.fvg_table_rows),
-        "HTF_OB_TABLE": _render_ob_table(
-            htf.order_blocks,
-            htf=htf_is_daily,
-            limit=config.ob_table_rows,
-            total_candles=(htf.closed_count or htf.candle_count),
-            price_format=price_format,
-        ),
-        "HTF_OB_COUNT": str(config.ob_table_rows),
-        "MTF_STRUCTURE_CLASS": mtf.structure_class.value,
-        "MTF_REF_HIGH_SUMMARY": mtf_facts.ref_high_summary or f"- Ref HIGH: {mtf_facts.recent_high}",
-        "MTF_REF_LOW_SUMMARY": mtf_facts.ref_low_summary or f"- Ref LOW: {mtf_facts.recent_low}",
-        "MTF_DEALING_RANGE": mtf_facts.dealing_range_summary
-        or _fallback_dealing_range(
-            current_price, mtf, price_format=price_format
-        ),
-        "MTF_VOLUME_RELATIVE": _volume_relative(mtf),
-        "MTF_VOLUME_SPIKE": _volume_spike(mtf),
-        "MTF_INTERVAL_LABEL": config.mtf_interval_label,
-        "MTF_CANDLE_COUNT": str(len(mtf_render)),
-        "MTF_CANDLE_TABLE_CSV": render_csv_table(
-            mtf_render, htf=mtf_is_daily, price_format=price_format
-        ),
-        "MTF_SWINGS_TABLE": mtf_swings,
-        "MTF_EQUAL_HIGHS": _render_equal_levels(
-            mtf.equal_highs, price_format=price_format
-        ),
-        "MTF_EQUAL_LOWS": _render_equal_levels(
-            mtf.equal_lows, price_format=price_format
-        ),
-        "MTF_FVG_TABLE": _render_fvg_table(
-            mtf.fvgs,
-            htf=mtf_is_daily,
-            limit=config.fvg_table_rows,
-            total_candles=(mtf.closed_count or mtf.candle_count),
-            price_format=price_format,
-            current_price=current_price,
-            atr=mtf.atr,
-            max_atr_mult=config.max_poi_atr_mult,
-        ),
-        "MTF_FVG_COUNT": str(config.fvg_table_rows),
-        "MTF_OB_TABLE": _render_ob_table(
-            mtf.order_blocks,
-            htf=mtf_is_daily,
-            limit=config.ob_table_rows,
-            total_candles=(mtf.closed_count or mtf.candle_count),
-            price_format=price_format,
-            current_price=current_price,
-            atr=mtf.atr,
-            max_atr_mult=config.max_poi_atr_mult,
-        ),
-        "MTF_OB_COUNT": str(config.ob_table_rows),
-        "LTF_STRUCTURE_CLASS": ltf.structure_class.value,
-        "LTF_REF_HIGH_SUMMARY": ltf_facts.ref_high_summary or f"- Ref HIGH: {ltf_facts.recent_high}",
-        "LTF_REF_LOW_SUMMARY": ltf_facts.ref_low_summary or f"- Ref LOW: {ltf_facts.recent_low}",
-        "LTF_DEALING_RANGE": ltf_facts.dealing_range_summary
-        or _fallback_dealing_range(
-            current_price, ltf, price_format=price_format
-        ),
-        "LTF_VOLUME_RELATIVE": _volume_relative(ltf),
-        "LTF_VOLUME_SPIKE": _volume_spike(ltf),
-        "LTF_INTERVAL_LABEL": config.ltf_interval_label,
-        "LTF_CANDLE_COUNT": str(len(ltf_render)),
-        "LTF_CANDLE_TABLE_CSV": render_csv_table(
-            ltf_render, htf=ltf_is_daily, price_format=price_format
-        ),
-        "LTF_SWINGS_TABLE": ltf_swings,
-        "LTF_EQUAL_HIGHS": _render_equal_levels(
-            ltf.equal_highs, price_format=price_format
-        ),
-        "LTF_EQUAL_LOWS": _render_equal_levels(
-            ltf.equal_lows, price_format=price_format
-        ),
-        "LTF_FVG_TABLE": _render_fvg_table(
-            ltf.fvgs,
-            htf=ltf_is_daily,
-            limit=config.fvg_table_rows,
-            total_candles=(ltf.closed_count or ltf.candle_count),
-            price_format=price_format,
-            current_price=current_price,
-            atr=ltf.atr,
-            max_atr_mult=config.max_poi_atr_mult,
-        ),
-        "LTF_FVG_COUNT": str(config.fvg_table_rows),
-        "LTF_OB_TABLE": _render_ob_table(
-            ltf.order_blocks,
-            htf=ltf_is_daily,
-            limit=config.ob_table_rows,
-            total_candles=(ltf.closed_count or ltf.candle_count),
-            price_format=price_format,
-            current_price=current_price,
-            atr=ltf.atr,
-            max_atr_mult=config.max_poi_atr_mult,
-        ),
-        "LTF_OB_COUNT": str(config.ob_table_rows),
     }
+
+    payload.update(
+        _build_timeframe_payload(
+            "HTF",
+            htf,
+            htf_candles,
+            interval_label=config.htf_interval_label,
+            is_daily=not cfg.is_intraday_interval(config.htf_interval),
+            render_candle_count=config.htf_render_candles,
+            current_price=current_price,
+            config=config,
+            filter_poi_distance=False,
+        )
+    )
+    payload.update(
+        _build_timeframe_payload(
+            "MTF",
+            mtf,
+            mtf_candles,
+            interval_label=config.mtf_interval_label,
+            is_daily=not cfg.is_intraday_interval(config.mtf_interval),
+            render_candle_count=config.mtf_render_candles,
+            current_price=current_price,
+            config=config,
+            filter_poi_distance=True,
+        )
+    )
+    payload.update(
+        _build_timeframe_payload(
+            "LTF",
+            ltf,
+            ltf_candles,
+            interval_label=config.ltf_interval_label,
+            is_daily=not cfg.is_intraday_interval(config.ltf_interval),
+            render_candle_count=config.ltf_render_candles,
+            current_price=current_price,
+            config=config,
+            filter_poi_distance=True,
+        )
+    )
 
     if config.include_atr:
         if htf.atr is None or mtf.atr is None or ltf.atr is None:

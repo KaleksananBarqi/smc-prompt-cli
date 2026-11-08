@@ -377,3 +377,118 @@ def test_interactive_wizard_handles_smc_prompt_error() -> None:
         assert exc_info.value.code == 2
 
 
+def test_format_cli_command_scenarios() -> None:
+    from smc_prompt.interactive import format_cli_command
+
+    # 1. Default prompt mode
+    cmd = format_cli_command("btcusdt")
+    assert cmd == "smc-prompt BTCUSDT"
+
+    # 2. Prompt mode dengan custom timeframe dan provider
+    cmd_custom = format_cli_command(
+        "ethusdt",
+        provider="bitunix",
+        htf_interval="1w",
+        mtf_interval="1d",
+        ltf_interval="4h",
+        swing_lookback=7,
+        print_stdout=True,
+    )
+    assert cmd_custom == (
+        "smc-prompt ETHUSDT --provider bitunix --htf-interval 1w "
+        "--mtf-interval 1d --ltf-interval 4h --swing-lookback 7 --stdout"
+    )
+
+    # 3. CSV provider
+    cmd_csv = format_cli_command("solusdt", provider="csv", input_csv="/tmp/sol.csv")
+    assert cmd_csv == "smc-prompt SOLUSDT --input-csv /tmp/sol.csv"
+
+    # 4. Review mode dengan dual-entry dan exit
+    cmd_review = format_cli_command(
+        "btcusdt",
+        action="review",
+        review_interval="15m",
+        review_candles=100,
+        review_direction="long",
+        review_entry=65000.0,
+        review_entry2=64800.0,
+        review_sl=64000.0,
+        review_tp=67000.0,
+        review_tp2=68000.0,
+        review_outcome="Hit TP",
+        review_exit=67000.0,
+        review_notes='Sweep liquidity "Asia low"',
+    )
+    assert "--candles-only" in cmd_review
+    assert "--review-interval 15m" in cmd_review
+    assert "--review-candles 100" in cmd_review
+    assert "--direction long" in cmd_review
+    assert "--entry 65000.0" in cmd_review
+    assert "--entry2 64800.0" in cmd_review
+    assert "--sl 64000.0" in cmd_review
+    assert "--tp 67000.0" in cmd_review
+    assert "--tp2 68000.0" in cmd_review
+    assert '--outcome "Hit TP"' in cmd_review
+    assert "--exit 67000.0" in cmd_review
+    assert r'--notes "Sweep liquidity \"Asia low\""' in cmd_review
+
+    # 5. Validate mode dengan dual entry dan status
+    cmd_val = format_cli_command(
+        "btcusdt",
+        action="validate",
+        entry_price=65000.0,
+        entry2_price=64800.0,
+        tp_price=67000.0,
+        tp2_price=68000.0,
+        sl_price=64000.0,
+        order_status="unfilled",
+        validate_interval="5m",
+        validate_candles=40,
+    )
+    assert "--validate-setup" in cmd_val
+    assert "--entry 65000.0" in cmd_val
+    assert "--entry2 64800.0" in cmd_val
+    assert "--tp 67000.0" in cmd_val
+    assert "--tp2 68000.0" in cmd_val
+    assert "--sl 64000.0" in cmd_val
+    assert "--unfilled" in cmd_val
+    assert "--validate-interval 5m" in cmd_val
+    assert "--validate-candles 40" in cmd_val
+
+
+def test_interactive_wizard_review_dual_entry_support() -> None:
+    with patch("smc_prompt.cli.run") as mock_run, \
+         patch("click.prompt") as mock_prompt, \
+         patch("click.confirm") as mock_confirm:
+
+        mock_prompt.side_effect = [
+            "1",                 # Provider: Binance
+            "BTCUSDT",           # Symbol
+            "2",                 # Action: Review
+            "1",                 # Arah: Long
+            "65000, 64800",      # Level Entry (dual entry)
+            "64000",             # Stop Loss
+            "67000, 68000",      # Take Profit (dual TP)
+            "1",                 # Hasil: Hit TP
+            "67000",             # Exit level
+            "Catatan review",    # Notes
+        ]
+        mock_confirm.side_effect = [
+            True,   # default review interval & candles
+            True,   # fill journal?
+            False,  # print stdout
+            True,   # execute run
+        ]
+
+        interactive.run_interactive_wizard()
+        mock_run.assert_called_once()
+        _, kwargs = mock_run.call_args
+        assert kwargs["entry"] == 65000.0
+        assert kwargs["entry2"] == 64800.0
+        assert kwargs["tp"] == 67000.0
+        assert kwargs["tp2"] == 68000.0
+        assert kwargs["sl"] == 64000.0
+        assert kwargs["direction"] == "long"
+
+
+

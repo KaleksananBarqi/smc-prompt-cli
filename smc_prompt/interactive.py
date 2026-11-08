@@ -55,6 +55,141 @@ def _prompt_choice(
         click.secho(f"Input tidak valid. Masukkan angka antara 1 dan {len(options)}.", fg="red")
 
 
+def _parse_dual_float_input(raw: str) -> tuple[float | None, float | None]:
+    """Parse string input harga yang bisa berupa nilai tunggal ('65000') atau pasangan ('65000, 64800')."""
+    cleaned = raw.strip()
+    if not cleaned:
+        return None, None
+    parts = [p.strip() for p in cleaned.replace("/", ",").split(",") if p.strip()]
+    if not parts:
+        return None, None
+    try:
+        val1 = float(parts[0])
+    except ValueError:
+        return None, None
+    val2: float | None = None
+    if len(parts) > 1:
+        try:
+            val2 = float(parts[1])
+        except ValueError:
+            val2 = None
+    return val1, val2
+
+
+def format_cli_command(
+    symbol: str,
+    *,
+    provider: str = cfg.PROVIDER_BINANCE,
+    input_csv: str | None = None,
+    twelvedata_key: str | None = None,
+    oanda_token: str | None = None,
+    action: str = "prompt",
+    htf_interval: str = cfg.HTF_INTERVAL,
+    mtf_interval: str = cfg.MTF_INTERVAL,
+    ltf_interval: str = cfg.LTF_INTERVAL,
+    swing_lookback: int = cfg.DEFAULT_SWING_LOOKBACK,
+    candles_only: bool = False,
+    review_interval: str = cfg.DEFAULT_REVIEW_INTERVAL,
+    review_candles: int = cfg.DEFAULT_REVIEW_CANDLES,
+    review_direction: str | None = None,
+    review_entry: float | None = None,
+    review_entry2: float | None = None,
+    review_sl: float | None = None,
+    review_tp: float | None = None,
+    review_tp2: float | None = None,
+    review_outcome: str | None = None,
+    review_exit: float | None = None,
+    review_notes: str | None = None,
+    validate_setup: bool = False,
+    entry_price: float | None = None,
+    entry2_price: float | None = None,
+    tp_price: float | None = None,
+    tp2_price: float | None = None,
+    sl_price: float | None = None,
+    order_status: str | None = None,
+    validate_interval: str = cfg.DEFAULT_VALIDATE_INTERVAL,
+    validate_candles: int = cfg.DEFAULT_VALIDATE_CANDLES,
+    print_stdout: bool = False,
+) -> str:
+    """Rakit perintah CLI satu baris (one-liner) smc-prompt murni dari kumpulan konfigurasi."""
+    cli_parts = [f"smc-prompt {symbol.upper()}"]
+    if provider != cfg.PROVIDER_BINANCE and provider != "csv":
+        cli_parts.append(f"--provider {provider}")
+    if provider == "csv" and input_csv:
+        cli_parts.append(f"--input-csv {input_csv}")
+    if twelvedata_key:
+        cli_parts.append(f"--twelvedata-key {twelvedata_key}")
+    if oanda_token:
+        cli_parts.append(f"--oanda-token {oanda_token}")
+
+    is_review = action == "review" or candles_only
+    is_validate = action == "validate" or validate_setup
+
+    if is_review:
+        cli_parts.append("--candles-only")
+        if review_interval != cfg.DEFAULT_REVIEW_INTERVAL:
+            cli_parts.append(f"--review-interval {review_interval}")
+        if review_candles != cfg.DEFAULT_REVIEW_CANDLES:
+            cli_parts.append(f"--review-candles {review_candles}")
+        if review_direction:
+            cli_parts.append(f"--direction {review_direction}")
+        if review_entry is not None:
+            cli_parts.append(f"--entry {review_entry}")
+        if review_entry2 is not None:
+            cli_parts.append(f"--entry2 {review_entry2}")
+        if review_sl is not None:
+            cli_parts.append(f"--sl {review_sl}")
+        if review_tp is not None:
+            cli_parts.append(f"--tp {review_tp}")
+        if review_tp2 is not None:
+            cli_parts.append(f"--tp2 {review_tp2}")
+        if review_outcome:
+            cli_parts.append(f'--outcome "{review_outcome}"')
+        if review_exit is not None:
+            cli_parts.append(f"--exit {review_exit}")
+        if review_notes:
+            clean_notes = review_notes.replace('"', '\\"')
+            cli_parts.append(f'--notes "{clean_notes}"')
+    elif is_validate:
+        cli_parts.append("--validate-setup")
+        if entry_price is not None:
+            cli_parts.append(f"--entry {entry_price}")
+        if entry2_price is not None:
+            cli_parts.append(f"--entry2 {entry2_price}")
+        if tp_price is not None:
+            cli_parts.append(f"--tp {tp_price}")
+        if tp2_price is not None:
+            cli_parts.append(f"--tp2 {tp2_price}")
+        if sl_price is not None:
+            cli_parts.append(f"--sl {sl_price}")
+        if order_status == "unfilled":
+            cli_parts.append("--unfilled")
+        elif order_status == "partial":
+            cli_parts.append("--partial")
+        elif order_status == "filled":
+            cli_parts.append("--filled")
+        elif order_status:
+            cli_parts.append(f"--order-status {order_status}")
+        if validate_interval != cfg.DEFAULT_VALIDATE_INTERVAL:
+            cli_parts.append(f"--validate-interval {validate_interval}")
+        if validate_candles != cfg.DEFAULT_VALIDATE_CANDLES:
+            cli_parts.append(f"--validate-candles {validate_candles}")
+    else:
+        if htf_interval != cfg.HTF_INTERVAL:
+            cli_parts.append(f"--htf-interval {htf_interval}")
+        if mtf_interval != cfg.MTF_INTERVAL:
+            cli_parts.append(f"--mtf-interval {mtf_interval}")
+        if ltf_interval != cfg.LTF_INTERVAL:
+            cli_parts.append(f"--ltf-interval {ltf_interval}")
+        if swing_lookback != cfg.DEFAULT_SWING_LOOKBACK:
+            cli_parts.append(f"--swing-lookback {swing_lookback}")
+
+    if print_stdout:
+        cli_parts.append("--stdout")
+
+    return " ".join(cli_parts)
+
+
 def run_interactive_wizard() -> None:
     """Run the guided interactive CLI wizard and execute the analysis."""
     _ensure_clean_exit = True
@@ -164,8 +299,10 @@ def run_interactive_wizard() -> None:
         review_candles = cfg.DEFAULT_REVIEW_CANDLES
         review_direction: str | None = None
         review_entry: float | None = None
+        review_entry2: float | None = None
         review_sl: float | None = None
         review_tp: float | None = None
+        review_tp2: float | None = None
         review_outcome: str | None = None
         review_notes: str | None = None
         review_exit: float | None = None     # Level Exit / Harga Hit riil
@@ -227,33 +364,36 @@ def run_interactive_wizard() -> None:
                     default="",
                     show_default=False,
                 ).strip()
-                if entry_input:
-                    try:
-                        review_entry = float(entry_input)
-                    except ValueError:
-                        review_entry = None
+                review_entry, review_entry2 = _parse_dual_float_input(entry_input)
 
                 sl_input = click.prompt(
                     "Stop Loss (SL) (opsional, kosongkan jika belum ada)",
                     default="",
                     show_default=False,
                 ).strip()
-                if sl_input:
-                    try:
-                        review_sl = float(sl_input)
-                    except ValueError:
-                        review_sl = None
+                review_sl, _ = _parse_dual_float_input(sl_input)
 
                 tp_input = click.prompt(
                     "Take Profit (TP) (opsional, kosongkan jika belum ada)",
                     default="",
                     show_default=False,
                 ).strip()
-                if tp_input:
+                review_tp, review_tp2 = _parse_dual_float_input(tp_input)
+
+                # Verifikasi konsistensi trade plan secara proaktif jika data esensial diisi
+                if review_entry is not None and (review_sl is not None or review_tp is not None):
                     try:
-                        review_tp = float(tp_input)
-                    except ValueError:
-                        review_tp = None
+                        from .trade_plan import build_trade_plan
+                        build_trade_plan(
+                            entry1=review_entry,
+                            entry2=review_entry2,
+                            tp1=review_tp,
+                            tp2=review_tp2,
+                            sl=review_sl,
+                            direction=review_direction,
+                        )
+                    except SmcPromptError as err:
+                        click.secho(f"  [!] Perhatian susunan setup: {err}", fg="yellow")
 
                 outcome_opts = [
                     ("Hit TP", "Hit TP (Target Profit Tercapai)"),
@@ -388,74 +528,41 @@ def run_interactive_wizard() -> None:
         )
         click.echo("")
 
-        # Build one-liner CLI command string for user's convenience
-        cli_parts = [f"smc-prompt {symbol}"]
-        if provider != cfg.PROVIDER_BINANCE and provider != "csv":
-            cli_parts.append(f"--provider {provider}")
-        if provider == "csv":
-            cli_parts.append(f"--input-csv {input_csv}")
-        if twelvedata_key:
-            cli_parts.append(f"--twelvedata-key {twelvedata_key}")
-        if oanda_token:
-            cli_parts.append(f"--oanda-token {oanda_token}")
-        if action == "review":
-            cli_parts.append("--candles-only")
-            if review_interval != cfg.DEFAULT_REVIEW_INTERVAL:
-                cli_parts.append(f"--review-interval {review_interval}")
-            if review_candles != cfg.DEFAULT_REVIEW_CANDLES:
-                cli_parts.append(f"--review-candles {review_candles}")
-            if review_direction:
-                cli_parts.append(f"--direction {review_direction}")
-            if review_entry is not None:
-                cli_parts.append(f"--entry {review_entry}")
-            if review_sl is not None:
-                cli_parts.append(f"--sl {review_sl}")
-            if review_tp is not None:
-                cli_parts.append(f"--tp {review_tp}")
-            if review_outcome:
-                cli_parts.append(f'--outcome "{review_outcome}"')
-            if review_exit is not None:
-                cli_parts.append(f"--exit {review_exit}")
-            if review_notes:
-                clean_notes = review_notes.replace('"', '\\"')
-                cli_parts.append(f'--notes "{clean_notes}"')
-        elif action == "validate":
-            cli_parts.append("--validate-setup")
-            if entry_price is not None:
-                cli_parts.append(f"--entry {entry_price}")
-            if entry2_price is not None:
-                cli_parts.append(f"--entry2 {entry2_price}")
-            if tp_price is not None:
-                cli_parts.append(f"--tp {tp_price}")
-            if tp2_price is not None:
-                cli_parts.append(f"--tp2 {tp2_price}")
-            if sl_price is not None:
-                cli_parts.append(f"--sl {sl_price}")
-            if order_status == "unfilled":
-                cli_parts.append("--unfilled")
-            elif order_status == "partial":
-                cli_parts.append("--partial")
-            elif order_status == "filled":
-                cli_parts.append("--filled")
-            elif order_status:
-                cli_parts.append(f"--order-status {order_status}")
-            if validate_interval != cfg.DEFAULT_VALIDATE_INTERVAL:
-                cli_parts.append(f"--validate-interval {validate_interval}")
-            if validate_candles != cfg.DEFAULT_VALIDATE_CANDLES:
-                cli_parts.append(f"--validate-candles {validate_candles}")
-        else:
-            if htf_interval != cfg.HTF_INTERVAL:
-                cli_parts.append(f"--htf-interval {htf_interval}")
-            if mtf_interval != cfg.MTF_INTERVAL:
-                cli_parts.append(f"--mtf-interval {mtf_interval}")
-            if ltf_interval != cfg.LTF_INTERVAL:
-                cli_parts.append(f"--ltf-interval {ltf_interval}")
-            if swing_lookback != cfg.DEFAULT_SWING_LOOKBACK:
-                cli_parts.append(f"--swing-lookback {swing_lookback}")
-        if print_stdout:
-            cli_parts.append("--stdout")
-
-        one_liner = " ".join(cli_parts)
+        # Build one-liner CLI command string via pure formatter function
+        one_liner = format_cli_command(
+            symbol,
+            provider=provider,
+            input_csv=input_csv,
+            twelvedata_key=twelvedata_key,
+            oanda_token=oanda_token,
+            action=action,
+            htf_interval=htf_interval,
+            mtf_interval=mtf_interval,
+            ltf_interval=ltf_interval,
+            swing_lookback=swing_lookback,
+            candles_only=candles_only,
+            review_interval=review_interval,
+            review_candles=review_candles,
+            review_direction=review_direction,
+            review_entry=review_entry,
+            review_entry2=review_entry2,
+            review_sl=review_sl,
+            review_tp=review_tp,
+            review_tp2=review_tp2,
+            review_outcome=review_outcome,
+            review_exit=review_exit,
+            review_notes=review_notes,
+            validate_setup=validate_setup,
+            entry_price=entry_price,
+            entry2_price=entry2_price,
+            tp_price=tp_price,
+            tp2_price=tp2_price,
+            sl_price=sl_price,
+            order_status=order_status,
+            validate_interval=validate_interval,
+            validate_candles=validate_candles,
+            print_stdout=print_stdout,
+        )
 
         # Summary box
         click.secho("=" * 70, fg="cyan", bold=True)
@@ -480,11 +587,13 @@ def run_interactive_wizard() -> None:
                 if review_direction:
                     parts.append(f"Arah={review_direction.capitalize()}")
                 if review_entry is not None:
-                    parts.append(f"Entry={review_entry}")
+                    e_str = f"{review_entry}" if review_entry2 is None else f"{review_entry}/{review_entry2}"
+                    parts.append(f"Entry={e_str}")
                 if review_sl is not None:
                     parts.append(f"SL={review_sl}")
                 if review_tp is not None:
-                    parts.append(f"TP={review_tp}")
+                    tp_str = f"{review_tp}" if review_tp2 is None else f"{review_tp}/{review_tp2}"
+                    parts.append(f"TP={tp_str}")
                 if review_exit is not None:
                     parts.append(f"Exit={review_exit}")
                 if review_outcome:
@@ -521,7 +630,9 @@ def run_interactive_wizard() -> None:
         actual_provider = cfg.PROVIDER_BINANCE if provider == "csv" else provider
 
         resolved_entry = review_entry if action == "review" else entry_price
+        resolved_entry2 = review_entry2 if action == "review" else entry2_price
         resolved_tp = review_tp if action == "review" else tp_price
+        resolved_tp2 = review_tp2 if action == "review" else tp2_price
         resolved_sl = review_sl if action == "review" else sl_price
         resolved_direction = review_direction if action == "review" else None
 
@@ -559,8 +670,8 @@ def run_interactive_wizard() -> None:
             order_status=order_status,
             validate_interval=validate_interval,
             validate_candles=validate_candles,
-            entry2=entry2_price if action == "validate" else None,
-            tp2=tp2_price if action == "validate" else None,
+            entry2=resolved_entry2,
+            tp2=resolved_tp2,
         )
         click.secho("\n[+] Selesai! Prompt siap dipaste (Ctrl+V) ke AI kesayangan Anda.", fg="bright_green", bold=True)
 
