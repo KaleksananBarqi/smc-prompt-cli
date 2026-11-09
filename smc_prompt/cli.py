@@ -418,6 +418,7 @@ def _prompt_size_notes(text: str, config: cfg.Config) -> list[str]:
 def run(
     symbol: str,
     *,
+    preset: str | None = None,
     htf_candles: int = cfg.DEFAULT_HTF_CANDLES,
     ltf_candles: int = cfg.DEFAULT_LTF_CANDLES,
     full_candles: bool = False,
@@ -425,10 +426,10 @@ def run(
     distance_reference: str = cfg.DISTANCE_REFERENCE_NEAREST,
     include_atr: bool = True,
     output_dir: str = cfg.DEFAULT_OUTPUT_DIR,
-    htf_interval: str = cfg.HTF_INTERVAL,
+    htf_interval: str | object = cfg._UNSET,
     mtf_candles: int = cfg.DEFAULT_MTF_CANDLES,
-    mtf_interval: str = cfg.MTF_INTERVAL,
-    ltf_interval: str = cfg.LTF_INTERVAL,
+    mtf_interval: str | object = cfg._UNSET,
+    ltf_interval: str | object = cfg._UNSET,
     print_stdout: bool = False,
     base_urls: tuple[str, ...] | None = None,
     input_csv: str | None = None,
@@ -467,6 +468,15 @@ def run(
     no_structure: bool = False,
 ) -> RunResult:
     """Chain fetch -> analyze -> render -> output. Raises on any failure."""
+
+    p_htf, p_mtf, p_ltf = (
+        cfg.resolve_preset(preset)
+        if preset
+        else (cfg.HTF_INTERVAL, cfg.MTF_INTERVAL, cfg.LTF_INTERVAL)
+    )  # type: ignore[misc]
+    eff_htf = p_htf if htf_interval is cfg._UNSET else str(htf_interval)
+    eff_mtf = p_mtf if mtf_interval is cfg._UNSET else str(mtf_interval)
+    eff_ltf = p_ltf if ltf_interval is cfg._UNSET else str(ltf_interval)
 
     if candles_only and validate_setup:
         raise ConfigError("Cannot specify both --candles-only and --validate-setup.")
@@ -512,10 +522,10 @@ def run(
         cfg.validate_interval(validate_interval, flag="--validate-interval")
         cfg.provider_interval(provider, validate_interval)
         cfg.validate_validate_candles(validate_candles)
-        htf_interval, mtf_interval, ltf_interval = resolve_mode_intervals(
-            htf_interval,
-            mtf_interval,
-            ltf_interval,
+        eff_htf, eff_mtf, eff_ltf = resolve_mode_intervals(
+            eff_htf,
+            eff_mtf,
+            eff_ltf,
             target_interval=validate_interval,
         )
 
@@ -523,10 +533,10 @@ def run(
         cfg.validate_interval(review_interval, flag="--review-interval")
         cfg.provider_interval(provider, review_interval)
         cfg.validate_review_candles(review_candles)
-        htf_interval, mtf_interval, ltf_interval = resolve_mode_intervals(
-            htf_interval,
-            mtf_interval,
-            ltf_interval,
+        eff_htf, eff_mtf, eff_ltf = resolve_mode_intervals(
+            eff_htf,
+            eff_mtf,
+            eff_ltf,
             target_interval=review_interval,
         )
 
@@ -554,6 +564,7 @@ def run(
 
     config = cfg.build_config(
         symbol,
+        preset=preset,
         htf_candles=htf_candles,
         mtf_candles=mtf_candles,
         ltf_candles=ltf_candles,
@@ -561,9 +572,9 @@ def run(
         swing_lookback=swing_lookback,
         distance_reference=distance_reference,
         include_atr=include_atr,
-        htf_interval=htf_interval,
-        mtf_interval=mtf_interval,
-        ltf_interval=ltf_interval,
+        htf_interval=eff_htf,
+        mtf_interval=eff_mtf,
+        ltf_interval=eff_ltf,
         output_dir=output_dir,
         max_prompt_bytes=max_prompt_bytes,
         base_urls=base_urls,
@@ -1009,6 +1020,17 @@ def run(
     help="Render the full analysis window of closed candles in the raw candle tables.",
 )
 @click.option(
+    "--preset",
+    "--style",
+    "preset",
+    type=click.Choice(list(cfg.TIMEFRAME_PRESETS.keys()), case_sensitive=False),
+    default=None,
+    help=(
+        "Preset gaya trading multi-timeframe: intraday (1d/1h/15m, default), "
+        "sniper (4h/1h/5m), balanced (4h/1h/15m), swing (1d/4h/1h), scalp (1h/15m/5m)."
+    ),
+)
+@click.option(
     "--htf-interval",
     type=str,
     default=cfg.HTF_INTERVAL,
@@ -1334,6 +1356,7 @@ def run(
 def main(
     symbol: str | None,
     interactive: bool,
+    preset: str | None,
     htf_candles: int,
     mtf_candles: int,
     ltf_candles: int,
@@ -1407,6 +1430,18 @@ def main(
 
     resolved_symbol = "" if symbol is None else symbol
 
+    ctx = click.get_current_context(silent=True)
+    htf_arg: str | object = htf_interval
+    mtf_arg: str | object = mtf_interval
+    ltf_arg: str | object = ltf_interval
+    if preset and ctx:
+        if ctx.get_parameter_source("htf_interval") != click.core.ParameterSource.COMMANDLINE:
+            htf_arg = cfg._UNSET
+        if ctx.get_parameter_source("mtf_interval") != click.core.ParameterSource.COMMANDLINE:
+            mtf_arg = cfg._UNSET
+        if ctx.get_parameter_source("ltf_interval") != click.core.ParameterSource.COMMANDLINE:
+            ltf_arg = cfg._UNSET
+
     base_urls = cfg.DEFAULT_BASE_URLS
     if base_url:
         remainder = tuple(
@@ -1417,13 +1452,14 @@ def main(
     try:
         run(
             resolved_symbol,
+            preset=preset,
             htf_candles=htf_candles,
             mtf_candles=mtf_candles,
             ltf_candles=ltf_candles,
             full_candles=full_candles,
-            htf_interval=htf_interval,
-            mtf_interval=mtf_interval,
-            ltf_interval=ltf_interval,
+            htf_interval=htf_arg,
+            mtf_interval=mtf_arg,
+            ltf_interval=ltf_arg,
             swing_lookback=swing_lookback,
             distance_reference=distance_reference,
             include_atr=not no_atr,

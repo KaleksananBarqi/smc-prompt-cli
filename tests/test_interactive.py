@@ -36,12 +36,11 @@ def test_interactive_wizard_default_run() -> None:
             "1",         # Provider: Binance
             "BTCUSDT",   # Symbol
             "1",         # Action: SMC/ICT prompt
+            "1",         # Step 4: Preset choice (1 -> intraday default)
         ]
-        # Step 4: Use default timeframe? (True)
         # Step 5: Print stdout? (False)
         # Final: Execute? (True)
         mock_confirm.side_effect = [
-            True,   # default timeframe
             False,  # print stdout
             True,   # execute run
         ]
@@ -133,9 +132,9 @@ def test_interactive_wizard_bitunix_selection() -> None:
             "2",         # Provider: Bitunix
             "ETHUSDT",   # Symbol
             "1",         # Action: SMC/ICT prompt
+            "1",         # Preset: Intraday
         ]
         mock_confirm.side_effect = [
-            True,   # default timeframe
             False,  # print stdout
             True,   # execute run
         ]
@@ -156,9 +155,9 @@ def test_interactive_wizard_abort_before_execution() -> None:
             "1",
             "BTCUSDT",
             "1",
+            "1",  # Preset: Intraday
         ]
         mock_confirm.side_effect = [
-            True,   # default timeframe
             False,  # print stdout
             False,  # Abort execute!
         ]
@@ -193,9 +192,9 @@ def test_interactive_wizard_mexc_selection() -> None:
             "3",         # Provider: MEXC
             "SOLUSDT",   # Symbol
             "1",         # Action: SMC/ICT prompt
+            "1",         # Preset: Intraday
         ]
         mock_confirm.side_effect = [
-            True,   # default timeframe
             False,  # print stdout
             True,   # execute run
         ]
@@ -216,9 +215,9 @@ def test_interactive_wizard_gate_selection() -> None:
             "4",         # Provider: Gate.io
             "DOGEUSDT",  # Symbol
             "1",         # Action: SMC/ICT prompt
+            "1",         # Preset: Intraday
         ]
         mock_confirm.side_effect = [
-            True,   # default timeframe
             False,  # print stdout
             True,   # execute run
         ]
@@ -240,9 +239,9 @@ def test_interactive_wizard_twelvedata_with_env(monkeypatch: pytest.MonkeyPatch)
             "5",         # Provider: Twelve Data
             "XAUUSD",    # Symbol
             "1",         # Action: SMC/ICT prompt
+            "1",         # Preset: Intraday
         ]
         mock_confirm.side_effect = [
-            True,   # default timeframe
             False,  # print stdout
             True,   # execute run
         ]
@@ -266,9 +265,9 @@ def test_interactive_wizard_twelvedata_prompts_when_missing_key(monkeypatch: pyt
             "XAUUSD",          # Symbol
             "manual-td-key",   # Twelve Data API Key prompted manually
             "1",               # Action: SMC/ICT prompt
+            "1",               # Preset: Intraday
         ]
         mock_confirm.side_effect = [
-            True,   # default timeframe
             False,  # print stdout
             True,   # execute run
         ]
@@ -365,9 +364,9 @@ def test_interactive_wizard_handles_smc_prompt_error() -> None:
             "1",         # Provider: Binance
             "BTCUSDT",   # Symbol
             "1",         # Action: SMC/ICT prompt
+            "1",         # Preset: Intraday
         ]
         mock_confirm.side_effect = [
-            True,   # default timeframe
             False,  # print stdout
             True,   # execute run
         ]
@@ -489,6 +488,137 @@ def test_interactive_wizard_review_dual_entry_support() -> None:
         assert kwargs["tp2"] == 68000.0
         assert kwargs["sl"] == 64000.0
         assert kwargs["direction"] == "long"
+
+
+def test_interactive_wizard_preset_sniper_selection() -> None:
+    with patch("smc_prompt.cli.run") as mock_run, \
+         patch("click.prompt") as mock_prompt, \
+         patch("click.confirm") as mock_confirm:
+
+        mock_prompt.side_effect = [
+            "1",         # Provider: Binance
+            "BTCUSDT",   # Symbol
+            "1",         # Action: SMC/ICT prompt
+            "2",         # Preset: 2 (sniper -> 4h / 1h / 5m)
+        ]
+        mock_confirm.side_effect = [
+            False,  # print stdout
+            True,   # execute run
+        ]
+
+        interactive.run_interactive_wizard()
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[0] == "BTCUSDT"
+        assert kwargs["preset"] == "sniper"
+        assert kwargs["htf_interval"] == "4h"
+        assert kwargs["mtf_interval"] == "1h"
+        assert kwargs["ltf_interval"] == "5m"
+
+
+def test_interactive_wizard_custom_timeframe_selection() -> None:
+    with patch("smc_prompt.cli.run") as mock_run, \
+         patch("click.prompt") as mock_prompt, \
+         patch("click.confirm") as mock_confirm:
+
+        mock_prompt.side_effect = [
+            "1",         # Provider: Binance
+            "BTCUSDT",   # Symbol
+            "1",         # Action: SMC/ICT prompt
+            "6",         # Preset: 6 (custom)
+            "1w",        # HTF
+            "1d",        # MTF
+            "4h",        # LTF
+            "7",         # Swing lookback
+        ]
+        mock_confirm.side_effect = [
+            False,  # print stdout
+            True,   # execute run
+        ]
+
+        interactive.run_interactive_wizard()
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[0] == "BTCUSDT"
+        assert kwargs["preset"] is None
+        assert kwargs["htf_interval"] == "1w"
+        assert kwargs["mtf_interval"] == "1d"
+        assert kwargs["ltf_interval"] == "4h"
+        assert kwargs["swing_lookback"] == 7
+
+
+def test_format_cli_command_with_presets() -> None:
+    from smc_prompt.interactive import format_cli_command
+
+    # Default preset (intraday) tidak menambahkan flag --preset
+    cmd_default = format_cli_command("BTCUSDT", preset="intraday")
+    assert cmd_default == "smc-prompt BTCUSDT"
+
+    # Non-default preset menambahkan --preset <nama>
+    cmd_sniper = format_cli_command(
+        "BTCUSDT",
+        preset="sniper",
+        htf_interval="4h",
+        mtf_interval="1h",
+        ltf_interval="5m",
+    )
+    assert cmd_sniper == "smc-prompt BTCUSDT --preset sniper"
+
+    # Preset dengan interval yang di-override
+    cmd_override = format_cli_command(
+        "BTCUSDT",
+        preset="sniper",
+        htf_interval="4h",
+        mtf_interval="1h",
+        ltf_interval="15m",
+    )
+    assert cmd_override == "smc-prompt BTCUSDT --preset sniper --ltf-interval 15m"
+
+
+def test_cli_preset_flags_dry_run() -> None:
+    runner = CliRunner()
+
+    # 1. Default (tanpa flag): 1d, 1h, 15m
+    res_def = runner.invoke(cli.main, ["BTCUSDT", "--dry-run"])
+    assert res_def.exit_code == 0
+    assert "htf_interval=1d" in res_def.output
+    assert "mtf_interval=1h" in res_def.output
+    assert "ltf_interval=15m" in res_def.output
+
+    # 2. Preset sniper: 4h, 1h, 5m
+    res_sniper = runner.invoke(cli.main, ["BTCUSDT", "--preset", "sniper", "--dry-run"])
+    assert res_sniper.exit_code == 0
+    assert "htf_interval=4h" in res_sniper.output
+    assert "mtf_interval=1h" in res_sniper.output
+    assert "ltf_interval=5m" in res_sniper.output
+
+    # 3. Preset swing: 1d, 4h, 1h
+    res_swing = runner.invoke(cli.main, ["BTCUSDT", "--preset", "swing", "--dry-run"])
+    assert res_swing.exit_code == 0
+    assert "htf_interval=1d" in res_swing.output
+    assert "mtf_interval=4h" in res_swing.output
+    assert "ltf_interval=1h" in res_swing.output
+
+    # 4. Preset scalp: 1h, 15m, 5m
+    res_scalp = runner.invoke(cli.main, ["BTCUSDT", "--preset", "scalp", "--dry-run"])
+    assert res_scalp.exit_code == 0
+    assert "htf_interval=1h" in res_scalp.output
+    assert "mtf_interval=15m" in res_scalp.output
+    assert "ltf_interval=5m" in res_scalp.output
+
+    # 5. Preset sniper dengan override --ltf-interval 15m
+    res_override = runner.invoke(cli.main, ["BTCUSDT", "--preset", "sniper", "--ltf-interval", "15m", "--dry-run"])
+    assert res_override.exit_code == 0
+    assert "htf_interval=4h" in res_override.output
+    assert "mtf_interval=1h" in res_override.output
+    assert "ltf_interval=15m" in res_override.output
+
+    # 6. Alias --style
+    res_style = runner.invoke(cli.main, ["BTCUSDT", "--style", "balanced", "--dry-run"])
+    assert res_style.exit_code == 0
+    assert "htf_interval=4h" in res_style.output
+    assert "mtf_interval=1h" in res_style.output
+    assert "ltf_interval=15m" in res_style.output
 
 
 

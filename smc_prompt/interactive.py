@@ -84,6 +84,7 @@ def format_cli_command(
     twelvedata_key: str | None = None,
     oanda_token: str | None = None,
     action: str = "prompt",
+    preset: str | None = None,
     htf_interval: str = cfg.HTF_INTERVAL,
     mtf_interval: str = cfg.MTF_INTERVAL,
     ltf_interval: str = cfg.LTF_INTERVAL,
@@ -175,12 +176,22 @@ def format_cli_command(
         if validate_candles != cfg.DEFAULT_VALIDATE_CANDLES:
             cli_parts.append(f"--validate-candles {validate_candles}")
     else:
-        if htf_interval != cfg.HTF_INTERVAL:
-            cli_parts.append(f"--htf-interval {htf_interval}")
-        if mtf_interval != cfg.MTF_INTERVAL:
-            cli_parts.append(f"--mtf-interval {mtf_interval}")
-        if ltf_interval != cfg.LTF_INTERVAL:
-            cli_parts.append(f"--ltf-interval {ltf_interval}")
+        if preset and preset != cfg.DEFAULT_PRESET:
+            cli_parts.append(f"--preset {preset}")
+            p_htf, p_mtf, p_ltf = cfg.TIMEFRAME_PRESETS[preset]
+            if htf_interval != p_htf:
+                cli_parts.append(f"--htf-interval {htf_interval}")
+            if mtf_interval != p_mtf:
+                cli_parts.append(f"--mtf-interval {mtf_interval}")
+            if ltf_interval != p_ltf:
+                cli_parts.append(f"--ltf-interval {ltf_interval}")
+        else:
+            if htf_interval != cfg.HTF_INTERVAL:
+                cli_parts.append(f"--htf-interval {htf_interval}")
+            if mtf_interval != cfg.MTF_INTERVAL:
+                cli_parts.append(f"--mtf-interval {mtf_interval}")
+            if ltf_interval != cfg.LTF_INTERVAL:
+                cli_parts.append(f"--ltf-interval {ltf_interval}")
         if swing_lookback != cfg.DEFAULT_SWING_LOOKBACK:
             cli_parts.append(f"--swing-lookback {swing_lookback}")
 
@@ -317,22 +328,29 @@ def run_interactive_wizard() -> None:
         validate_interval = cfg.DEFAULT_VALIDATE_INTERVAL
         validate_candles = cfg.DEFAULT_VALIDATE_CANDLES
 
+        selected_preset: str | None = cfg.DEFAULT_PRESET
+
         if action == "prompt":
-            click.secho("[Langkah 4/5] Pengaturan Timeframe & Analisis:", fg="yellow", bold=True)
-            click.echo("  Setelan default standar:")
-            click.echo(f"    * HTF: {click.style(htf_interval, fg='cyan', bold=True)} ({htf_candles} candle)")
-            click.echo(f"    * MTF: {click.style(mtf_interval, fg='cyan', bold=True)} ({mtf_candles} candle)")
-            click.echo(f"    * LTF: {click.style(ltf_interval, fg='cyan', bold=True)} ({ltf_candles} candle)")
-            click.echo(f"    * Fractal Swing Lookback: {click.style(str(swing_lookback), fg='cyan', bold=True)}")
-            use_default_tf = click.confirm(
-                click.style("Gunakan setelan default di atas? (Tekan Enter jika Ya)", fg="bright_white"),
-                default=True,
-            )
-            if not use_default_tf:
+            click.secho("[Langkah 4/5] Pengaturan Timeframe & Template Gaya Trading:", fg="yellow", bold=True)
+            preset_options = [
+                ("intraday", "Intraday Konservatif (1d / 1h / 15m) - Target PDH/PDL, filter noise"),
+                ("sniper", "Intraday Sniper / Killzone (4h / 1h / 5m) - Cepat tanggap 4H, entry presisi 5m tight SL"),
+                ("balanced", "Intraday Seimbang (4h / 1h / 15m) - Rasio harmonis 4x fraktal"),
+                ("swing", "Swing Trading (1d / 4h / 1h) - Trend makro beberapa hari s.d. minggu"),
+                ("scalp", "Scalping Cepat (1h / 15m / 5m) - Eksekusi menit, session extremes"),
+                ("custom", "Kustom Timeframe - Tentukan HTF, MTF, dan LTF sendiri"),
+            ]
+            chosen_style = _prompt_choice("Pilih Template Gaya Trading:", preset_options, default_index=0)
+            if chosen_style != "custom":
+                selected_preset = chosen_style
+                htf_interval, mtf_interval, ltf_interval = cfg.TIMEFRAME_PRESETS[chosen_style]
+                click.echo(f"  * Template aktif: {click.style(chosen_style.upper(), fg='cyan', bold=True)} ({htf_interval} / {mtf_interval} / {ltf_interval})")
+            else:
+                selected_preset = None
                 htf_interval = click.prompt("HTF interval (e.g. 1d, 4h)", default=htf_interval)
                 mtf_interval = click.prompt("MTF interval (e.g. 4h, 2h)", default=mtf_interval)
                 ltf_interval = click.prompt("LTF interval (e.g. 1h, 15m)", default=ltf_interval)
-                swing_lookback = click.prompt("Swing lookback N (ganjil >= 3)", type=int, default=swing_lookback)
+                swing_lookback = int(click.prompt("Swing lookback N (ganjil >= 3)", type=int, default=swing_lookback))
 
         elif action == "review":
             candles_only = True
@@ -536,6 +554,7 @@ def run_interactive_wizard() -> None:
             twelvedata_key=twelvedata_key,
             oanda_token=oanda_token,
             action=action,
+            preset=selected_preset,
             htf_interval=htf_interval,
             mtf_interval=mtf_interval,
             ltf_interval=ltf_interval,
@@ -579,7 +598,8 @@ def run_interactive_wizard() -> None:
         action_label = "SMC/ICT Prompt Generator" if action == "prompt" else ("Review Pasca-Trade" if action == "review" else "Validasi Setup")
         click.echo(f"  * Mode Tindakan  : {click.style(action_label, fg='bright_white')}")
         if action == "prompt":
-            click.echo(f"  * Timeframes     : HTF={htf_interval} ({htf_candles}c) | MTF={mtf_interval} ({mtf_candles}c) | LTF={ltf_interval} ({ltf_candles}c)")
+            preset_badge = f" [{selected_preset.upper()}]" if selected_preset else " [CUSTOM]"
+            click.echo(f"  * Timeframes     : HTF={htf_interval} ({htf_candles}c) | MTF={mtf_interval} ({mtf_candles}c) | LTF={ltf_interval} ({ltf_candles}c){preset_badge}")
         elif action == "review":
             click.echo(f"  * Interval/Count : {review_interval} ({review_candles} candles)")
             if review_direction or review_entry is not None or review_outcome or review_exit is not None:
@@ -638,6 +658,7 @@ def run_interactive_wizard() -> None:
 
         run(
             symbol,
+            preset=selected_preset,
             htf_candles=htf_candles,
             mtf_candles=mtf_candles,
             ltf_candles=ltf_candles,

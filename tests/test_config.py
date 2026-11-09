@@ -191,7 +191,7 @@ def test_config_class_properties():
 def test_build_config_happy_path():
     cfg = build_config("BTCUSDT")
     assert cfg.symbol == "BTCUSDT"
-    assert cfg.htf_interval == "4h"
+    assert cfg.htf_interval == "1d"
     assert cfg.mtf_interval == "1h"
     assert cfg.ltf_interval == "15m"
     assert cfg.provider == "binance"
@@ -201,6 +201,49 @@ def test_build_config_happy_path():
     assert cfg_oanda.symbol == "EURUSD"
     assert cfg_oanda.provider == "oanda"
     assert cfg_oanda.volume_available is False
+
+
+def test_build_config_presets():
+    # 1. Preset sniper (4h, 1h, 5m)
+    c_sniper = build_config("BTCUSDT", preset="sniper")
+    assert c_sniper.htf_interval == "4h"
+    assert c_sniper.mtf_interval == "1h"
+    assert c_sniper.ltf_interval == "5m"
+    assert c_sniper.preset == "sniper"
+
+    # 2. Preset balanced (4h, 1h, 15m)
+    c_bal = build_config("BTCUSDT", preset="balanced")
+    assert c_bal.htf_interval == "4h"
+    assert c_bal.mtf_interval == "1h"
+    assert c_bal.ltf_interval == "15m"
+
+    # 3. Preset swing (1d, 4h, 1h)
+    c_swing = build_config("BTCUSDT", preset="swing")
+    assert c_swing.htf_interval == "1d"
+    assert c_swing.mtf_interval == "4h"
+    assert c_swing.ltf_interval == "1h"
+
+    # 4. Preset scalp (1h, 15m, 5m)
+    c_scalp = build_config("BTCUSDT", preset="scalp")
+    assert c_scalp.htf_interval == "1h"
+    assert c_scalp.mtf_interval == "15m"
+    assert c_scalp.ltf_interval == "5m"
+
+    # 5. Preset intraday default (1d, 1h, 15m)
+    c_intra = build_config("BTCUSDT", preset="intraday")
+    assert c_intra.htf_interval == "1d"
+    assert c_intra.mtf_interval == "1h"
+    assert c_intra.ltf_interval == "15m"
+
+    # 6. Override single interval on top of preset
+    c_over = build_config("BTCUSDT", preset="sniper", ltf_interval="15m")
+    assert c_over.htf_interval == "4h"
+    assert c_over.mtf_interval == "1h"
+    assert c_over.ltf_interval == "15m"
+
+    # 7. Invalid preset raises ConfigError
+    with pytest.raises(ConfigError, match="Preset gaya trading 'unknown' tidak dikenal"):
+        build_config("BTCUSDT", preset="unknown")
 
 def test_build_config_validations():
     # Missing symbol

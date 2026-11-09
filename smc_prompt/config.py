@@ -18,9 +18,43 @@ from .errors import ConfigError
 # Intervals / endpoint paths (no API key, read-only public market data only)
 # --------------------------------------------------------------------------
 
-HTF_INTERVAL: str = "4h"
+HTF_INTERVAL: str = "1d"
 MTF_INTERVAL: str = "1h"
 LTF_INTERVAL: str = "15m"
+
+#: Trading style preset names.
+PRESET_INTRADAY: str = "intraday"
+PRESET_SNIPER: str = "sniper"
+PRESET_BALANCED: str = "balanced"
+PRESET_SWING: str = "swing"
+PRESET_SCALP: str = "scalp"
+
+DEFAULT_PRESET: str = PRESET_INTRADAY
+
+#: Standardized 3-tier timeframe presets: name -> (htf, mtf, ltf).
+TIMEFRAME_PRESETS: dict[str, tuple[str, str, str]] = {
+    PRESET_INTRADAY: ("1d", "1h", "15m"),
+    PRESET_SNIPER: ("4h", "1h", "5m"),
+    PRESET_BALANCED: ("4h", "1h", "15m"),
+    PRESET_SWING: ("1d", "4h", "1h"),
+    PRESET_SCALP: ("1h", "15m", "5m"),
+}
+
+
+def resolve_preset(preset: str | None) -> tuple[str, str, str] | None:
+    """Resolve a trading style preset name to a canonical (htf, mtf, ltf) tuple.
+
+    Raises :class:`~smc_prompt.errors.ConfigError` when the preset is not recognized.
+    """
+    if not preset:
+        return None
+    key = preset.strip().lower()
+    if key not in TIMEFRAME_PRESETS:
+        allowed = ", ".join(TIMEFRAME_PRESETS.keys())
+        raise ConfigError(
+            f"Preset gaya trading '{preset}' tidak dikenal. Pilihan valid: {allowed}."
+        )
+    return TIMEFRAME_PRESETS[key]
 
 #: Every kline interval Binance Futures accepts, in ascending-duration order. Used
 #: to validate ``--htf-interval`` / ``--mtf-interval`` / ``--ltf-interval``.
@@ -760,6 +794,7 @@ class Config:
     htf_interval: str = HTF_INTERVAL
     mtf_interval: str = MTF_INTERVAL
     ltf_interval: str = LTF_INTERVAL
+    preset: str | None = None
     swing_merge_atr_mult: Decimal = DEFAULT_SWING_MERGE_ATR_MULT
     atr_period: int = DEFAULT_ATR_PERIOD
     structure_min_swings: int = DEFAULT_STRUCTURE_MIN_SWINGS
@@ -849,9 +884,13 @@ class Config:
         return interval_label(self.ltf_interval)
 
 
+_UNSET: object = object()
+
+
 def build_config(
     symbol: str,
     *,
+    preset: str | None = None,
     htf_candles: int = DEFAULT_HTF_CANDLES,
     mtf_candles: int = DEFAULT_MTF_CANDLES,
     ltf_candles: int = DEFAULT_LTF_CANDLES,
@@ -862,9 +901,9 @@ def build_config(
     swing_lookback: int = DEFAULT_SWING_LOOKBACK,
     distance_reference: str = DISTANCE_REFERENCE_NEAREST,
     include_atr: bool = True,
-    htf_interval: str = HTF_INTERVAL,
-    mtf_interval: str = MTF_INTERVAL,
-    ltf_interval: str = LTF_INTERVAL,
+    htf_interval: str | object = _UNSET,
+    mtf_interval: str | object = _UNSET,
+    ltf_interval: str | object = _UNSET,
     fvg_table_rows: int = DEFAULT_FVG_TABLE_ROWS,
     ob_table_rows: int = DEFAULT_OB_TABLE_ROWS,
     output_dir: str = DEFAULT_OUTPUT_DIR,
@@ -887,6 +926,18 @@ def build_config(
     if not normalized_symbol:
         raise ConfigError("SYMBOL is required. Example: smc-prompt BTCUSDT.")
 
+    resolved_preset: str | None = None
+    if preset is not None:
+        p_htf, p_mtf, p_ltf = resolve_preset(preset)  # type: ignore[misc]
+        resolved_preset = preset.strip().lower()
+        resolved_htf = p_htf if htf_interval is _UNSET else str(htf_interval)
+        resolved_mtf = p_mtf if mtf_interval is _UNSET else str(mtf_interval)
+        resolved_ltf = p_ltf if ltf_interval is _UNSET else str(ltf_interval)
+    else:
+        resolved_htf = HTF_INTERVAL if htf_interval is _UNSET else str(htf_interval)
+        resolved_mtf = MTF_INTERVAL if mtf_interval is _UNSET else str(mtf_interval)
+        resolved_ltf = LTF_INTERVAL if ltf_interval is _UNSET else str(ltf_interval)
+
     if not isinstance(swing_lookback, int) or swing_lookback < MIN_SWING_LOOKBACK:
         raise ConfigError("--swing-lookback must be an odd integer >= 3.")
     if swing_lookback % 2 == 0:
@@ -906,19 +957,19 @@ def build_config(
             + "."
         )
 
-    validate_interval(htf_interval, flag="--htf-interval")
-    validate_interval(mtf_interval, flag="--mtf-interval")
-    validate_interval(ltf_interval, flag="--ltf-interval")
+    validate_interval(resolved_htf, flag="--htf-interval")
+    validate_interval(resolved_mtf, flag="--mtf-interval")
+    validate_interval(resolved_ltf, flag="--ltf-interval")
 
     # The three tiers must map to three DISTINCT series. Enforcing this in
     # ``build_config`` (not only in ``LocalCsvSource``) makes the rule
     # mode-independent: identical tiers are meaningless on both the network
     # and offline paths and would otherwise emit duplicate blocks.
-    if len({htf_interval, mtf_interval, ltf_interval}) != 3:
+    if len({resolved_htf, resolved_mtf, resolved_ltf}) != 3:
         raise ConfigError(
             "--htf-interval, --mtf-interval and --ltf-interval must be three "
             "DISTINCT intervals so each tier maps to its own series "
-            f"(got htf={htf_interval}, mtf={mtf_interval}, ltf={ltf_interval})."
+            f"(got htf={resolved_htf}, mtf={resolved_mtf}, ltf={resolved_ltf})."
         )
 
     if not isinstance(volume_mean_period, int) or volume_mean_period < 1:
@@ -964,9 +1015,10 @@ def build_config(
         swing_lookback=swing_lookback,
         distance_reference=distance_reference,
         include_atr=include_atr,
-        htf_interval=htf_interval,
-        mtf_interval=mtf_interval,
-        ltf_interval=ltf_interval,
+        htf_interval=resolved_htf,
+        mtf_interval=resolved_mtf,
+        ltf_interval=resolved_ltf,
+        preset=resolved_preset,
         swings_table_rows=DEFAULT_SWINGS_TABLE_ROWS,
         fvg_table_rows=fvg_table_rows,
         ob_table_rows=ob_table_rows,

@@ -65,7 +65,7 @@ tinggal menjalankan satu perintah lalu menempelkan hasilnya ke LLM mana pun.
     (`ATR ≈ x% of price`), dan candle terakhir diberi **sinyal volume mekanis**
     (volume relatif `last/mean(N)` dan flag spike).
   - **Layer B — Raw Candle Table:** tabel OHLCV ringkas format CSV hemat token untuk **tiga
-    timeframe native** (HTF, MTF, LTF; default `4h` / `1h` / `15m`, tiap interval
+    timeframe native** (HTF, MTF, LTF; default `1d` / `1h` / `15m`, tiap interval
     dapat dikonfigurasi) agar LLM dapat membaca pola mikro secara tajam.
 - **Deteksi swing deterministik:** N-bar Williams Fractal (default `N = 5`)
   dengan post-filter pemisahan ATR dan **post-pass skeleton bergantian**
@@ -93,7 +93,7 @@ tinggal menjalankan satu perintah lalu menempelkan hasilnya ke LLM mana pun.
   `--stdout` menambahkan cetak ke stdout. Jika clipboard tidak tersedia
   (lingkungan headless), itu hanya peringatan (exit 0).
 - **Tiga timeframe native (3-tier)** — satu kali jalan mengambil, menganalisis,
-  dan merender **tiga seri** (HTF + MTF + LTF; default `4h` / `1h` / `15m`) ke
+  dan merender **tiga seri** (HTF + MTF + LTF; default `1d` / `1h` / `15m`) ke
   dalam satu prompt. Tier MTF adalah instance ketiga melalui pipeline
   `analyze()` yang sama; `TimeframeAnalysis` tidak berubah.
 - **Mode offline / data lokal (Phase 4)** — `--input-csv` (opsional
@@ -188,7 +188,7 @@ Paket juga dapat dijalankan tanpa instalasi melalui `python -m smc_prompt`.
 Bentuk umum:
 
 ```
-smc-prompt <SYMBOL> [--htf-interval I] [--mtf-interval I] [--ltf-interval I]
+smc-prompt <SYMBOL> [--preset P] [--htf-interval I] [--mtf-interval I] [--ltf-interval I]
                      [--htf-candles N] [--mtf-candles N] [--ltf-candles N]
                      [--swing-lookback N]
                      [--distance-reference {nearest,most-recent}] [--no-atr]
@@ -223,7 +223,8 @@ dan [`smc_prompt/config.py`](smc_prompt/config.py).
 | `-i`, `--interactive` | flag | off | **Terminal Interactive Mode.** Menjalankan panduan interaktif ramah pengguna langkah-demi-langkah (pilih provider, ticker, aksi) dengan smart defaults untuk timeframe. |
 | `--provider` | pilihan: `binance` \| `bitunix` \| `mexc` \| `gate` \| `twelvedata` \| `oanda` | `binance` | Sumber data market data. `binance`, `bitunix`, `mexc`, dan `gate` untuk crypto (USDT-M Futures publik tanpa API key); `twelvedata` dan `oanda` untuk spot FX dan logam mulia (`XAUUSD`). |
 | `--no-fallback` | flag | off | **Strict Provider Mode.** Nonaktifkan rantai pengalihan otomatis antar-exchange crypto (`binance` ➔ `bitunix` ➔ `mexc` ➔ `gate`). Gagal seketika (*fail-fast*) jika exchange yang diminta mengalami error jaringan. |
-| `--htf-interval` | interval Binance | `4h` | Interval kline Binance untuk seri HTF. Nilai valid: `1m,3m,5m,15m,30m,1h,2h,4h,6h,8h,12h,1d,3d,1w,1M`. Nilai di luar daftar ditolak dengan exit code `2`. |
+| `--preset` (atau `--style`) | pilihan: `intraday` \| `sniper` \| `balanced` \| `swing` \| `scalp` | `intraday` (implisit) | **Preset Gaya Trading.** Otomatis mengonfigurasi trio timeframe (HTF/MTF/LTF): `intraday` (`1d/1h/15m`), `sniper` (`4h/1h/5m`), `balanced` (`4h/1h/15m`), `swing` (`1d/4h/1h`), `scalp` (`1h/15m/5m`). Dapat dioverride oleh `--htf-interval`, `--mtf-interval`, atau `--ltf-interval`. |
+| `--htf-interval` | interval Binance | `1d` | Interval kline Binance untuk seri HTF. Nilai valid: `1m,3m,5m,15m,30m,1h,2h,4h,6h,8h,12h,1d,3d,1w,1M`. Nilai di luar daftar ditolak dengan exit code `2`. |
 | `--mtf-interval` | interval Binance | `1h` | Interval kline Binance untuk seri MTF (medium). Daftar nilai valid sama dengan `--htf-interval`. Harus berbeda dari dua tier lainnya. |
 | `--ltf-interval` | interval Binance | `15m` | Interval kline Binance untuk seri LTF. Daftar nilai valid sama dengan `--htf-interval`. Harus berbeda dari dua tier lainnya. |
 | `--htf-candles` | `int >= 10` | `90` | Jumlah candle closed HTF yang diambil dari pasar untuk kalkulasi indikator/struktur Layer-A. |
@@ -361,7 +362,7 @@ CLI akan memandu Anda langkah-demi-langkah:
 1. Memilih asal data (Binance, Bitunix, MEXC, Gate.io, Twelve Data, OANDA, atau CSV lokal).
 2. Memilih simbol/ticker (mis. `BTCUSDT`, `ETHUSDT`, `XAUUSD`).
 3. Memilih tindakan (Generate Prompt SMC/ICT, Review Pasca-Trade, atau Validasi Setup).
-4. **Smart Defaults Timeframe:** Cukup tekan `ENTER` untuk menyetujui paket timeframe standar tanpa perlu mengetik ulang!
+4. **Pemilihan Template Gaya Trading:** Wizard menyediakan pilihan template siap pakai: Intraday Konservatif (`1d / 1h / 15m` [Default]), Sniper Killzone (`4h / 1h / 5m`), Intraday Seimbang (`4h / 1h / 15m`), Swing Trading (`1d / 4h / 1h`), Scalping Cepat (`1h / 15m / 5m`), atau Kustom. Cukup tekan `ENTER` untuk langsung memilih default Intraday!
 5. **Dukungan Dual-Entry & Validasi Proaktif:** Pada mode Review dan Validasi Setup, Anda dapat memasukkan input harga single maupun dual-entry (mis. `65000, 64800` untuk Entry 1 dan 2) dan multi-TP (`67000, 68000`). Wizard memvalidasi kelogisan hierarki harga (posisi SL/TP terhadap arah entry) secara instan via `build_trade_plan()`.
 6. **Perintah One-Liner Otomatis:** Wizard selalu menyajikan perintah terminal satu baris (*one-liner CLI*) yang ekuivalen di kotak ringkasan akhir untuk kenyamanan eksekusi cepat di masa mendatang.
 
@@ -409,7 +410,7 @@ smc-prompt BTCUSDT --provider binance --no-fallback
 
 #### 1. Menjalankan standar (default) pada BTCUSDT (Binance Futures)
 
-Menghasilkan prompt dengan 3-tier timeframe native (default HTF `4h` [90 candle closed], MTF `1h` [186 candle closed], LTF `15m` [192 candle closed]),
+Menghasilkan prompt dengan 3-tier timeframe native (default HTF `1d` [90 candle closed], MTF `1h` [186 candle closed], LTF `15m` [192 candle closed]),
 `--swing-lookback 5`, referensi jarak `nearest`, ATR(14) aktif, dan render tail hemat token.
 
 ```bash
@@ -430,6 +431,27 @@ Secara default prompt hanya merender tail 20 HTF, 30 MTF, dan 40 LTF candle tera
 
 ```bash
 smc-prompt BTCUSDT --full-candles
+```
+
+#### 1c. Menggunakan Preset Gaya Trading (--preset / --style)
+
+Alih-alih mengetik ketiga interval secara manual, Anda dapat menggunakan preset gaya trading yang terstandarisasi:
+
+```bash
+# Gaya Sniper / Killzone (HTF 4h, MTF 1h, LTF 5m) - untuk entri presisi SL ketat di sesi aktif
+smc-prompt BTCUSDT --preset sniper
+
+# Gaya Seimbang / Balanced (HTF 4h, MTF 1h, LTF 15m) - rasio fraktal 4x harmonis
+smc-prompt BTCUSDT --preset balanced
+
+# Gaya Swing Trading (HTF 1d, MTF 4h, LTF 1h) - holding makro beberapa hari s.d. minggu
+smc-prompt BTCUSDT --preset swing
+
+# Gaya Scalping Cepat (HTF 1h, MTF 15m, LTF 5m) - eksekusi menit pada session extremes
+smc-prompt BTCUSDT --preset scalp
+
+# Kombinasi preset + override interval spesifik (misal LTF 3m)
+smc-prompt BTCUSDT --preset sniper --ltf-interval 3m
 ```
 
 #### 2. Menjalankan tanpa instalasi (via `python -m`)
@@ -789,7 +811,7 @@ spot gold:
 | Twelve Data | `twelvedata` | FX & logam (`XAU/USD`) | Spot OTC | ya | tidak (0) | API key gratis |
 | OANDA v20 | `oanda` | FX & logam (`XAU_USD`) | Spot CFD/OTC | ya | tick count → dinolkan | token (akun practice gratis) |
 
-Seluruh provider menyajikan interval `4h` secara **native**, sehingga trio default `4h` / `1h` / `15m` dipetakan
+Seluruh provider menyajikan interval `1d`, `4h`, `1h`, dan `15m` secara **native**, sehingga seluruh preset gaya trading (termasuk default `1d` / `1h` / `15m`) dipetakan
 1:1 tanpa memerlukan resample atau agregasi buatan.
 
 ### Pemetaan Simbol Kontrak Kripto & Normalisasi Otomatis
@@ -1007,9 +1029,11 @@ Konstanta penting (`smc_prompt/config.py`):
 
 | Konstanta | Default | Keterangan |
 |---|---|---|
-| `HTF_INTERVAL` | `4h` | Default `--htf-interval` (interval kline Binance untuk HTF). |
+| `HTF_INTERVAL` | `1d` | Default `--htf-interval` (interval kline Binance untuk HTF). |
 | `MTF_INTERVAL` | `1h` | Default `--mtf-interval` (interval kline Binance untuk MTF). |
 | `LTF_INTERVAL` | `15m` | Default `--ltf-interval` (interval kline Binance untuk LTF). |
+| `DEFAULT_PRESET` | `intraday` | Default preset gaya trading (`1d / 1h / 15m`). |
+| `TIMEFRAME_PRESETS` | `dict` | Pemetaan preset gaya trading resmi (`intraday`, `sniper`, `balanced`, `swing`, `scalp`). |
 | `TIME_PATH` | `/fapi/v1/time` | Endpoint waktu server Binance Futures untuk keputusan candle closed dan `GENERATED_AT_UTC`. |
 | `EXCHANGE_INFO_PATH` | `/fapi/v1/exchangeInfo` | Sumber `PRICE_FILTER.tickSize` (presisi harga) dan `status` simbol. |
 | `MAX_PRICE_DECIMALS` | `8` | Batas atas desimal harga dari tickSize. |

@@ -94,3 +94,7 @@ Penetrasi kerugian berlawanan terdalam (*peak unrealized drawdown*) yang sempat 
 ### First-Touch Sequence
 Kronologi urutan pertama kali harga menyentuh level-level kritis perdagangan (*entry*, *Stop Loss*, *TP1*, *TP2*) yang dievaluasi secara sekuensial candle-demi-candle guna membuktikan apakah target tercapai sebelum stop loss tersentuh tanpa bias observasi visual.
 
+### Trading Style Preset
+Konfigurasi terstandardisasi untuk analisis multi-timeframe 3-Tier (HTF, MTF, LTF) yang diselaraskan dengan ritme eksekusi dan durasi holding trading, mencakup preset `intraday` (default: 1d/1h/15m), `sniper` (4h/1h/5m), `balanced` (4h/1h/15m), `swing` (1d/4h/1h), dan `scalp` (1h/15m/5m).
+_Avoid_: Timeframe Profile, Strategy Mode, Chart Template.
+
